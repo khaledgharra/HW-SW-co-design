@@ -50,7 +50,7 @@ public:
 
 int main()
 {
-    constexpr size_t NUM_RECORDS = 1000000;
+    constexpr size_t NUM_RECORDS = 2000000;
     constexpr size_t NUM_QUERIES = 100;
 
     LogDatabase db(NUM_RECORDS);

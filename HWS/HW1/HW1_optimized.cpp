@@ -6,6 +6,7 @@
 
 constexpr int N = 8192;
 constexpr int TILE = 64;
+constexpr int ITERATIONS = 4;
 
 int main()
 {
@@ -19,6 +20,10 @@ int main()
 
     auto start = std::chrono::high_resolution_clock::now();
 
+    auto start = std::chrono::high_resolution_clock::now();
+
+for (int iter = 0; iter < ITERATIONS; iter++)
+{
     for (int by = 0; by < N; by += TILE)
     {
         for (int bx = 0; bx < N; bx += TILE)
@@ -39,7 +44,10 @@ int main()
         }
     }
 
-    auto end = std::chrono::high_resolution_clock::now();
+    std::swap(input, output);
+}
+
+auto end = std::chrono::high_resolution_clock::now();
 
     uint64_t checksum = 0;
 

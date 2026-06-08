@@ -16,7 +16,9 @@ int main()
     }
 
     auto start = std::chrono::high_resolution_clock::now();
-
+    constexpr int ITERATIONS = 4;
+    for (int iter = 0; iter < ITERATIONS; iter++)
+{
     for (int y = 0; y < N; ++y)
     {
         for (int x = 0; x < N; ++x)
@@ -24,6 +26,9 @@ int main()
             output[x * N + y] = input[y * N + x];
         }
     }
+
+    std::swap(input, output);
+}
 
     auto end = std::chrono::high_resolution_clock::now();
 

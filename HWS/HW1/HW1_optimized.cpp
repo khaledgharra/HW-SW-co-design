@@ -10,57 +10,22 @@ struct LogEntry {
     char payload[64];
 };
 
-struct Node {
-    LogEntry data;
-    Node* next;
-
-    Node(const LogEntry& entry)
-        : data(entry), next(nullptr) {}
-};
-
 class LogDatabase {
 private:
-    Node* head;
+    std::vector<LogEntry> logs;
 
 public:
-    LogDatabase() : head(nullptr) {}
-
-    ~LogDatabase() {
-        Node* curr = head;
-        while (curr) {
-            Node* tmp = curr;
-            curr = curr->next;
-            delete tmp;
-        }
-    }
-
     void insert(const LogEntry& entry) {
-        Node* node = new Node(entry);
-
-        if (!head) {
-            head = node;
-            return;
-        }
-
-        Node* curr = head;
-        while (curr->next) {
-            curr = curr->next;
-        }
-
-        curr->next = node;
+        logs.push_back(entry);
     }
 
     uint64_t count_user_events(uint32_t target_user) const {
         uint64_t count = 0;
 
-        Node* curr = head;
-
-        while (curr) {
-            if (curr->data.user_id == target_user) {
+        for (const auto& log : logs) {
+            if (log.user_id == target_user) {
                 count++;
             }
-
-            curr = curr->next;
         }
 
         return count;
@@ -68,7 +33,7 @@ public:
 };
 
 int main() {
-    constexpr size_t NUM_RECORDS = 200'000;
+    constexpr size_t NUM_RECORDS = 200000;
     constexpr size_t NUM_QUERIES = 20;
 
     LogDatabase db;

@@ -2,6 +2,7 @@
 #include <vector>
 #include <random>
 #include <chrono>
+#include <cstdint>
 
 struct LogEntry {
     uint64_t timestamp;
@@ -10,57 +11,26 @@ struct LogEntry {
     char payload[64];
 };
 
-struct Node {
-    LogEntry data;
-    Node* next;
-
-    Node(const LogEntry& entry)
-        : data(entry), next(nullptr) {}
-};
-
 class LogDatabase {
 private:
-    Node* head;
+    std::vector<LogEntry> logs;
 
 public:
-    LogDatabase() : head(nullptr) {}
-
-    ~LogDatabase() {
-        Node* curr = head;
-        while (curr) {
-            Node* tmp = curr;
-            curr = curr->next;
-            delete tmp;
-        }
+    explicit LogDatabase(size_t expected_size) {
+        logs.reserve(expected_size);
     }
 
     void insert(const LogEntry& entry) {
-        Node* node = new Node(entry);
-
-        if (!head) {
-            head = node;
-            return;
-        }
-
-        Node* curr = head;
-        while (curr->next) {
-            curr = curr->next;
-        }
-
-        curr->next = node;
+        logs.push_back(entry);
     }
 
     uint64_t count_user_events(uint32_t target_user) const {
         uint64_t count = 0;
 
-        Node* curr = head;
-
-        while (curr) {
-            if (curr->data.user_id == target_user) {
+        for (const auto& log : logs) {
+            if (log.user_id == target_user) {
                 count++;
             }
-
-            curr = curr->next;
         }
 
         return count;
@@ -68,17 +38,15 @@ public:
 };
 
 int main() {
-    constexpr size_t NUM_RECORDS = 200'000;
-    constexpr size_t NUM_QUERIES = 20;
+    constexpr size_t NUM_RECORDS = 1000000;
+    constexpr size_t NUM_QUERIES = 100;
 
-    LogDatabase db;
+    LogDatabase db(NUM_RECORDS);
 
     std::mt19937 rng(42);
 
     std::uniform_int_distribution<uint32_t> user_dist(1, 10000);
     std::uniform_int_distribution<uint32_t> event_dist(1, 20);
-
-    std::cout << "Generating records..." << std::endl;
 
     for (size_t i = 0; i < NUM_RECORDS; i++) {
         LogEntry entry;
@@ -88,21 +56,18 @@ int main() {
         entry.event_type = event_dist(rng);
 
         for (int j = 0; j < 64; j++) {
-            entry.payload[j] = static_cast<char>('A' + (j % 26));
+            entry.payload[j] = 'A' + (j % 26);
         }
 
         db.insert(entry);
     }
-
-    std::cout << "Running queries..." << std::endl;
 
     uint64_t total = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
 
     for (size_t q = 0; q < NUM_QUERIES; q++) {
-        uint32_t target_user = user_dist(rng);
-        total += db.count_user_events(target_user);
+        total += db.count_user_events(user_dist(rng));
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -110,9 +75,5 @@ int main() {
     std::chrono::duration<double> elapsed = end - start;
 
     std::cout << "Result: " << total << std::endl;
-    std::cout << "Query Time: "
-              << elapsed.count()
-              << " seconds" << std::endl;
-
-    return 0;
+    std::cout << "Query Time: " << elapsed.count() << " seconds\n";
 }

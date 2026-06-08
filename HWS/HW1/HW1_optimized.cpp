@@ -1,92 +1,89 @@
 #include <iostream>
 #include <vector>
-#include <array>
 #include <random>
 #include <chrono>
 #include <cstdint>
+#include <algorithm>
 
-class LogDatabase {
-private:
-    std::vector<uint64_t> timestamps;
-    std::vector<uint32_t> user_ids;
-    std::vector<uint32_t> event_types;
-    std::vector<std::array<char,64>> payloads;
+constexpr int WIDTH = 4096;
+constexpr int HEIGHT = 4096;
+constexpr int ITERATIONS = 20;
+constexpr int TILE = 64;
 
-public:
-    explicit LogDatabase(size_t expected_size)
+inline int idx(int y, int x)
+{
+    return y * WIDTH + x;
+}
+
+void blur(const std::vector<uint8_t>& input,
+          std::vector<uint8_t>& output)
+{
+    for (int by = 1; by < HEIGHT - 1; by += TILE)
     {
-        timestamps.reserve(expected_size);
-        user_ids.reserve(expected_size);
-        event_types.reserve(expected_size);
-        payloads.reserve(expected_size);
-    }
+        for (int bx = 1; bx < WIDTH - 1; bx += TILE)
+        {
+            int y_end = std::min(by + TILE, HEIGHT - 1);
+            int x_end = std::min(bx + TILE, WIDTH - 1);
 
-    void insert(
-        uint64_t timestamp,
-        uint32_t user_id,
-        uint32_t event_type,
-        const std::array<char,64>& payload)
-    {
-        timestamps.push_back(timestamp);
-        user_ids.push_back(user_id);
-        event_types.push_back(event_type);
-        payloads.push_back(payload);
-    }
+            for (int y = by; y < y_end; y++)
+            {
+                for (int x = bx; x < x_end; x++)
+                {
+                    int center = idx(y, x);
 
-    uint64_t count_user_events(uint32_t target_user) const
-    {
-        uint64_t count = 0;
+                    int sum =
+                        input[center - WIDTH - 1] +
+                        input[center - WIDTH] +
+                        input[center - WIDTH + 1] +
+                        input[center - 1] +
+                        input[center] +
+                        input[center + 1] +
+                        input[center + WIDTH - 1] +
+                        input[center + WIDTH] +
+                        input[center + WIDTH + 1];
 
-        const uint32_t* data = user_ids.data();
-        size_t n = user_ids.size();
-
-        for (size_t i = 0; i < n; i++) {
-            count += (data[i] == target_user);
+                    output[center] =
+                        static_cast<uint8_t>(sum / 9);
+                }
+            }
         }
-
-        return count;
     }
-};
+}
 
 int main()
 {
-    constexpr size_t NUM_RECORDS = 20000000;
-    constexpr size_t NUM_QUERIES = 100;
-
-    LogDatabase db(NUM_RECORDS);
+    std::vector<uint8_t> img(WIDTH * HEIGHT);
+    std::vector<uint8_t> tmp(WIDTH * HEIGHT);
 
     std::mt19937 rng(42);
+    std::uniform_int_distribution<int> dist(0, 255);
 
-    std::uniform_int_distribution<uint32_t> user_dist(1, 10000);
-    std::uniform_int_distribution<uint32_t> event_dist(1, 20);
-
-    for (size_t i = 0; i < NUM_RECORDS; i++) {
-
-        std::array<char,64> payload;
-
-        for (int j = 0; j < 64; j++) {
-            payload[j] = 'A' + (j % 26);
-        }
-
-        db.insert(
-            i,
-            user_dist(rng),
-            event_dist(rng),
-            payload);
+    for (auto& p : img)
+    {
+        p = dist(rng);
     }
-
-    uint64_t total = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (size_t q = 0; q < NUM_QUERIES; q++) {
-        total += db.count_user_events(user_dist(rng));
+    for (int i = 0; i < ITERATIONS; i++)
+    {
+        blur(img, tmp);
+        std::swap(img, tmp);
     }
 
     auto end = std::chrono::high_resolution_clock::now();
 
+    uint64_t checksum = 0;
+
+    for (auto p : img)
+    {
+        checksum += p;
+    }
+
     std::chrono::duration<double> elapsed = end - start;
 
-    std::cout << "Result: " << total << std::endl;
-    std::cout << "Query Time: " << elapsed.count() << " seconds\n";
+    std::cout << "Checksum: " << checksum << "\n";
+    std::cout << "Time: " << elapsed.count() << " sec\n";
+
+    return 0;
 }

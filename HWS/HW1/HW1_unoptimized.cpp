@@ -4,76 +4,82 @@
 #include <chrono>
 #include <cstdint>
 
-struct LogEntry {
-    uint64_t timestamp;
-    uint32_t user_id;
-    uint32_t event_type;
-    char payload[64];
-};
+constexpr int WIDTH = 4096;
+constexpr int HEIGHT = 4096;
+constexpr int ITERATIONS = 20;
 
-class LogDatabase {
-private:
-    std::vector<LogEntry> logs;
+using Image = std::vector<std::vector<uint8_t>>;
 
-public:
-    explicit LogDatabase(size_t expected_size) {
-        logs.reserve(expected_size);
-    }
+void blur(const Image& input, Image& output)
+{
+    for (int y = 0; y < HEIGHT; y++)
+    {
+        for (int x = 0; x < WIDTH; x++)
+        {
+            int sum = 0;
+            int count = 0;
 
-    void insert(const LogEntry& entry) {
-        logs.push_back(entry);
-    }
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dx = -1; dx <= 1; dx++)
+                {
+                    int ny = y + dy;
+                    int nx = x + dx;
 
-    uint64_t count_user_events(uint32_t target_user) const {
-        uint64_t count = 0;
-
-        for (const auto& log : logs) {
-            if (log.user_id == target_user) {
-                count++;
+                    if (ny >= 0 && ny < HEIGHT &&
+                        nx >= 0 && nx < WIDTH)
+                    {
+                        sum += input[ny][nx];
+                        count++;
+                    }
+                }
             }
+
+            output[y][x] = static_cast<uint8_t>(sum / count);
         }
-
-        return count;
     }
-};
+}
 
-int main() {
-    constexpr size_t NUM_RECORDS = 20000000;
-    constexpr size_t NUM_QUERIES = 100;
-
-    LogDatabase db(NUM_RECORDS);
+int main()
+{
+    Image img(HEIGHT, std::vector<uint8_t>(WIDTH));
+    Image tmp(HEIGHT, std::vector<uint8_t>(WIDTH));
 
     std::mt19937 rng(42);
+    std::uniform_int_distribution<int> dist(0, 255);
 
-    std::uniform_int_distribution<uint32_t> user_dist(1, 10000);
-    std::uniform_int_distribution<uint32_t> event_dist(1, 20);
-
-    for (size_t i = 0; i < NUM_RECORDS; i++) {
-        LogEntry entry;
-
-        entry.timestamp = i;
-        entry.user_id = user_dist(rng);
-        entry.event_type = event_dist(rng);
-
-        for (int j = 0; j < 64; j++) {
-            entry.payload[j] = 'A' + (j % 26);
+    for (int y = 0; y < HEIGHT; y++)
+    {
+        for (int x = 0; x < WIDTH; x++)
+        {
+            img[y][x] = dist(rng);
         }
-
-        db.insert(entry);
     }
-
-    uint64_t total = 0;
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (size_t q = 0; q < NUM_QUERIES; q++) {
-        total += db.count_user_events(user_dist(rng));
+    for (int i = 0; i < ITERATIONS; i++)
+    {
+        blur(img, tmp);
+        std::swap(img, tmp);
     }
 
     auto end = std::chrono::high_resolution_clock::now();
 
+    uint64_t checksum = 0;
+
+    for (int y = 0; y < HEIGHT; y++)
+    {
+        for (int x = 0; x < WIDTH; x++)
+        {
+            checksum += img[y][x];
+        }
+    }
+
     std::chrono::duration<double> elapsed = end - start;
 
-    std::cout << "Result: " << total << std::endl;
-    std::cout << "Query Time: " << elapsed.count() << " seconds\n";
+    std::cout << "Checksum: " << checksum << "\n";
+    std::cout << "Time: " << elapsed.count() << " sec\n";
+
+    return 0;
 }

@@ -68,8 +68,8 @@ public:
 };
 
 int main() {
-    constexpr size_t NUM_RECORDS = 2'000'000;
-    constexpr size_t NUM_QUERIES = 5'000;
+    constexpr size_t NUM_RECORDS = 500'000;
+    constexpr size_t NUM_QUERIES = 50;
 
     LogDatabase db;
 

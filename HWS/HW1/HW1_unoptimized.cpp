@@ -1,85 +1,43 @@
 #include <iostream>
 #include <vector>
-#include <random>
 #include <chrono>
 #include <cstdint>
 
-constexpr int WIDTH = 4096;
-constexpr int HEIGHT = 4096;
-constexpr int ITERATIONS = 50;
-
-using Image = std::vector<std::vector<uint8_t>>;
-
-void blur(const Image& input, Image& output)
-{
-    for (int y = 0; y < HEIGHT; y++)
-    {
-        for (int x = 0; x < WIDTH; x++)
-        {
-            int sum = 0;
-            int count = 0;
-
-            for (int dy = -1; dy <= 1; dy++)
-            {
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    int ny = y + dy;
-                    int nx = x + dx;
-
-                    if (ny >= 0 && ny < HEIGHT &&
-                        nx >= 0 && nx < WIDTH)
-                    {
-                        sum += input[ny][nx];
-                        count++;
-                    }
-                }
-            }
-
-            output[y][x] = static_cast<uint8_t>(sum / count);
-        }
-    }
-}
+constexpr int N = 8192;
 
 int main()
 {
-    Image img(HEIGHT, std::vector<uint8_t>(WIDTH));
-    Image tmp(HEIGHT, std::vector<uint8_t>(WIDTH));
+    std::vector<uint32_t> input(N * N);
+    std::vector<uint32_t> output(N * N);
 
-    std::mt19937 rng(42);
-    std::uniform_int_distribution<int> dist(0, 255);
-
-    for (int y = 0; y < HEIGHT; y++)
+    for (size_t i = 0; i < input.size(); ++i)
     {
-        for (int x = 0; x < WIDTH; x++)
-        {
-            img[y][x] = dist(rng);
-        }
+        input[i] = static_cast<uint32_t>(i);
     }
 
     auto start = std::chrono::high_resolution_clock::now();
 
-    for (int i = 0; i < ITERATIONS; i++)
+    for (int y = 0; y < N; ++y)
     {
-        blur(img, tmp);
-        std::swap(img, tmp);
+        for (int x = 0; x < N; ++x)
+        {
+            output[x * N + y] = input[y * N + x];
+        }
     }
 
     auto end = std::chrono::high_resolution_clock::now();
 
     uint64_t checksum = 0;
 
-    for (int y = 0; y < HEIGHT; y++)
+    for (auto val : output)
     {
-        for (int x = 0; x < WIDTH; x++)
-        {
-            checksum += img[y][x];
-        }
+        checksum += val;
     }
 
     std::chrono::duration<double> elapsed = end - start;
 
-    std::cout << "Checksum: " << checksum << "\n";
-    std::cout << "Time: " << elapsed.count() << " sec\n";
+    std::cout << "Checksum: " << checksum << std::endl;
+    std::cout << "Time: " << elapsed.count() << " sec" << std::endl;
 
     return 0;
 }

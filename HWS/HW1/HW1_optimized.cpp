@@ -24,7 +24,7 @@ void blur(const std::vector<uint8_t>& input, std::vector<uint8_t>& output)
         int row_next = (y + 1) * WIDTH;
 
         // Force compiler auto-vectorization hint for the sequential row strip
-        #pragma GCC optimize("O3")
+        
         #pragma GCC ivdep
         for (int x = 1; x < WIDTH - 1; ++x)
         {

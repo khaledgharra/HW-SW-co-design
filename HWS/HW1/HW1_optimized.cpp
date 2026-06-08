@@ -7,7 +7,7 @@
 
 constexpr int WIDTH = 4096;
 constexpr int HEIGHT = 4096;
-constexpr int ITERATIONS = 20;
+constexpr int ITERATIONS = 50;
 constexpr int TILE = 64;
 
 inline int idx(int y, int x)

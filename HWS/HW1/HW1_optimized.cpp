@@ -18,7 +18,7 @@ int main()
         input[i] = static_cast<uint32_t>(i);
     }
 
-    auto start = std::chrono::high_resolution_clock::now();
+    
 
     auto start = std::chrono::high_resolution_clock::now();
 

@@ -2,6 +2,7 @@
 #include <vector>
 #include <random>
 #include <chrono>
+#include <cstdint>
 
 struct LogEntry {
     uint64_t timestamp;
@@ -15,6 +16,10 @@ private:
     std::vector<LogEntry> logs;
 
 public:
+    explicit LogDatabase(size_t expected_size) {
+        logs.reserve(expected_size);
+    }
+
     void insert(const LogEntry& entry) {
         logs.push_back(entry);
     }
@@ -33,10 +38,10 @@ public:
 };
 
 int main() {
-    constexpr size_t NUM_RECORDS = 200000;
-    constexpr size_t NUM_QUERIES = 20;
+    constexpr size_t NUM_RECORDS = 500000;
+    constexpr size_t NUM_QUERIES = 100;
 
-    LogDatabase db;
+    LogDatabase db(NUM_RECORDS);
 
     std::mt19937 rng(42);
 

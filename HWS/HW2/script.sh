@@ -17,12 +17,12 @@ fi
 
 # ── 1. Compile ────────────────────────────────────────────────────────────────
 echo "[*] Compiling Traditional..."
-g++ -O0 -g -std=c++17 \
+g++ -O0 -g -fno-omit-frame-pointer -std=c++17 \
     "$TRAD/hospital.cpp" "$TRAD/main.cpp" \
     -o "$OUT/traditional"
 
 echo "[*] Compiling FaaS..."
-g++ -O0 -g -std=c++17 \
+g++ -O0 -g -fno-omit-frame-pointer -std=c++17 \
     "$FAAS/fn_admit_patient.cpp"     \
     "$FAAS/fn_discharge_patient.cpp" \
     "$FAAS/fn_assign_doctor_shift.cpp" \
@@ -57,14 +57,14 @@ L1-dcache-load-misses,context-switches,task-clock \
 # ── 4. Flame graphs ──────────────────────────────────────────────────────────
 echo ""
 echo "[*] Recording FlameGraph — Traditional..."
-perf record --call-graph dwarf -F 99 -o "$OUT/perf_traditional.data" "$OUT/traditional"
+perf record --call-graph fp -F 99 -o "$OUT/perf_traditional.data" "$OUT/traditional"
 perf script -i "$OUT/perf_traditional.data" \
     | "$FG/stackcollapse-perf.pl" \
     | "$FG/flamegraph.pl" --title "Traditional Hospital System" \
     > "$OUT/flame_traditional.svg"
 
 echo "[*] Recording FlameGraph — FaaS..."
-perf record --call-graph dwarf -F 99 -o "$OUT/perf_faas.data" "$OUT/faas"
+perf record --call-graph fp -F 99 -o "$OUT/perf_faas.data" "$OUT/faas"
 perf script -i "$OUT/perf_faas.data" \
     | "$FG/stackcollapse-perf.pl" \
     | "$FG/flamegraph.pl" --title "FaaS Hospital System" \

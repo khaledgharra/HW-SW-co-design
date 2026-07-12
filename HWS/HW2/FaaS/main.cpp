@@ -74,10 +74,17 @@ int main() {
             ++ops;
         }
 
-        // 8. Discharge patients
+        // 8. Mass casualty protocol (Part 3)
+        MassCasualtyEvent ev{30, 0.8f};
+        volatile auto mcr = std::any_cast<MassCasualtyResult>(
+            dispatcher.invoke("mass_casualty", ev, db));
+        (void)mcr;
+        ++ops;
+
+        // 9. Discharge patients
         for (int i = 0; i < 40; ++i) {
-            DischargeEvent ev{i};
-            dispatcher.invoke("discharge_patient", ev, db);
+            DischargeEvent dev{i};
+            dispatcher.invoke("discharge_patient", dev, db);
             ++ops;
         }
     }

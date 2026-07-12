@@ -31,6 +31,7 @@ g++ -O0 -g -fno-omit-frame-pointer -std=c++17 \
     "$FAAS/fn_er_admission.cpp"      \
     "$FAAS/fn_allocate_equipment.cpp" \
     "$FAAS/fn_generate_bill.cpp"     \
+    "$FAAS/fn_mass_casualty.cpp"     \
     "$FAAS/dispatcher.cpp"           \
     "$FAAS/main.cpp"                 \
     -o "$OUT/faas"

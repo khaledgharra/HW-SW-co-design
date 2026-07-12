@@ -65,7 +65,12 @@ int main() {
             ++ops;
         }
 
-        // 8. Discharge patients
+        // 8. Mass casualty protocol (Part 3)
+        volatile auto mcr = sys.handleMassCasualty(30);
+        (void)mcr;
+        ++ops;
+
+        // 9. Discharge patients
         for (int i = 0; i < 40; ++i) {
             sys.dischargePatient(i);
             ++ops;

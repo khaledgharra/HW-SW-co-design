@@ -160,6 +160,52 @@ Bill HospitalSystem::generateBill(int patient_id) {
     return {patient_id, p->bill_base, equip_fee, doc_fee, total};
 }
 
+// Part 3 — Mass Casualty Event Protocol
+// WARNING: this method touches nurses_, or_rooms_, and doctors_ simultaneously.
+// A bug here can corrupt the entire system state in one call.
+HospitalSystem::MassCasualtyResult
+HospitalSystem::handleMassCasualty(int er_capacity, float threshold)
+{
+    MassCasualtyResult result{0, 0, 0, false};
+
+    // Only trigger if ER queue exceeds threshold
+    if ((float)er_queue_.size() / er_capacity < threshold)
+        return result;
+
+    result.triggered = true;
+
+    // 1. Pull nurses from non-critical departments (dept 2 and 3) to ER (dept 0)
+    for (auto& n : nurses_) {
+        if (n.assigned && (n.dept_id == 2 || n.dept_id == 3)) {
+            n.dept_id = 0;   // reassign to ER
+            ++result.nurses_reallocated;
+        }
+    }
+
+    // 2. Cancel elective OR bookings — free room and doctor
+    for (auto& o : or_rooms_) {
+        if (!o.available) {
+            // free the doctor
+            for (auto& d : doctors_)
+                if (d.id == o.doctor_id) { d.available = true; break; }
+
+            o.available  = true;
+            o.doctor_id  = -1;
+            o.patient_id = -1;
+            o.procedure  = "";
+            ++result.or_bookings_cancelled;
+        }
+    }
+
+    // 3. Alert all available doctors
+    for (auto& d : doctors_) {
+        if (d.available && d.shift != Shift::OFF)
+            ++result.doctors_alerted;
+    }
+
+    return result;
+}
+
 int HospitalSystem::availableBeds(int dept_id) const {
     int count = 0;
     for (const auto& b : beds_)

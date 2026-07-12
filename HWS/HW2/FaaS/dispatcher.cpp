@@ -7,6 +7,7 @@
 #include "fn_er_admission.h"
 #include "fn_allocate_equipment.h"
 #include "fn_generate_bill.h"
+#include "fn_mass_casualty.h"
 #include <any>
 
 Dispatcher make_dispatcher() {
@@ -42,6 +43,11 @@ Dispatcher make_dispatcher() {
 
     d.register_function("generate_bill", [](const std::any& ev, Database& db) -> std::any {
         return fn_generate_bill(std::any_cast<BillEvent>(ev), db);
+    });
+
+    // Part 3 — one new registration, zero existing functions changed
+    d.register_function("mass_casualty", [](const std::any& ev, Database& db) -> std::any {
+        return fn_mass_casualty(std::any_cast<MassCasualtyEvent>(ev), db);
     });
 
     return d;

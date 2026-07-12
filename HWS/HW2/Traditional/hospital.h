@@ -85,6 +85,15 @@ public:
     int   availableBeds(int dept_id) const;
     int   erQueueSize()              const;
 
+    // Part 3 — Mass Casualty Event Protocol
+    struct MassCasualtyResult {
+        int nurses_reallocated;
+        int or_bookings_cancelled;
+        int doctors_alerted;
+        bool triggered;
+    };
+    MassCasualtyResult handleMassCasualty(int er_capacity, float threshold = 0.8f);
+
 private:
     std::vector<Patient>      patients_;
     std::vector<Doctor>       doctors_;

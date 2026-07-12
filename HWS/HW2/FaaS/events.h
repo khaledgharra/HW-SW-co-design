@@ -28,3 +28,8 @@ struct EquipResult { bool success; };
 
 struct BillEvent  { int patient_id; };
 struct BillResult { double base; double equip_fee; double doctor_fee; double total; };
+
+// Part 3 — Mass Casualty Event Protocol
+struct MassCasualtyEvent  { int er_capacity; float threshold; };
+struct MassCasualtyResult { int nurses_reallocated; int or_bookings_cancelled;
+                            int doctors_alerted;    bool triggered; };

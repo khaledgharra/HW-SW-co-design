@@ -3,7 +3,7 @@
 #include <chrono>
 #include <string>
 
-static constexpr int ITERATIONS   = 200;
+static constexpr int ITERATIONS   = 5000;
 static constexpr int NUM_BEDS      = 200;
 static constexpr int NUM_DOCTORS   = 50;
 static constexpr int NUM_NURSES    = 80;

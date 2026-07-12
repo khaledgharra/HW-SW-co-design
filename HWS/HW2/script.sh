@@ -57,14 +57,14 @@ L1-dcache-load-misses,context-switches,task-clock \
 # ── 4. Flame graphs ──────────────────────────────────────────────────────────
 echo ""
 echo "[*] Recording FlameGraph — Traditional..."
-perf record --call-graph fp -F 99 -o "$OUT/perf_traditional.data" "$OUT/traditional"
+perf record -e cpu-clock --call-graph fp -F 99 -o "$OUT/perf_traditional.data" "$OUT/traditional"
 perf script -i "$OUT/perf_traditional.data" \
     | "$FG/stackcollapse-perf.pl" \
     | "$FG/flamegraph.pl" --title "Traditional Hospital System" \
     > "$OUT/flame_traditional.svg"
 
 echo "[*] Recording FlameGraph — FaaS..."
-perf record --call-graph fp -F 99 -o "$OUT/perf_faas.data" "$OUT/faas"
+perf record -e cpu-clock --call-graph fp -F 99 -o "$OUT/perf_faas.data" "$OUT/faas"
 perf script -i "$OUT/perf_faas.data" \
     | "$FG/stackcollapse-perf.pl" \
     | "$FG/flamegraph.pl" --title "FaaS Hospital System" \

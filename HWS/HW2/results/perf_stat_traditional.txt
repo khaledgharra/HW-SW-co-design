@@ -1,0 +1,18 @@
+[Traditional] ops=1550000  time=1.97042s
+
+ Performance counter stats for '/root/HW-SW-co-design/HWS/HW2/results/traditional':
+
+        4685871661      cycles                    #    2.377 GHz                    
+        9804808408      instructions              #    2.09  insn per cycle         
+              4091      cache-misses              #    0.637 % of all cache refs    
+            642445      cache-references          #  325.915 K/sec                  
+           3807415      L1-dcache-load-misses                                       
+                17      context-switches          #    8.624 /sec                   
+           1971.20 msec task-clock                #    0.996 CPUs utilized          
+
+       1.979912409 seconds time elapsed
+
+       1.973270000 seconds user
+       0.004003000 seconds sys
+
+

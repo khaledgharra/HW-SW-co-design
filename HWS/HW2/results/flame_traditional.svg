@@ -1,0 +1,1170 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="326" onload="init(evt)" viewBox="0 0 1200 326" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="326.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Traditional Hospital System</text>
+<text id="details" x="10.00" y="309" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="309" > </text>
+<g id="frames">
+<g >
+<title>__gnu_cxx::__stoa&lt;long, int, char, int&gt; (30,303,030 samples, 1.55%)</title><rect x="338.5" y="181" width="18.2" height="15.0" fill="rgb(235,141,33)" rx="2" ry="2" />
+<text  x="341.45" y="191.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::findDoctor (80,808,080 samples, 4.12%)</title><rect x="393.2" y="197" width="48.7" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="396.20" y="207.5" >Hosp..</text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::_S_do_relocate (20,202,020 samples, 1.03%)</title><rect x="143.8" y="133" width="12.2" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="146.81" y="143.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::generateBill (262,626,260 samples, 13.40%)</title><rect x="806.8" y="213" width="158.1" height="15.0" fill="rgb(251,213,51)" rx="2" ry="2" />
+<text  x="809.80" y="223.5" >HospitalSystem::gene..</text>
+</g>
+<g >
+<title>Equipment::~Equipment (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="117" width="6.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="1083.52" y="127.5" ></text>
+</g>
+<g >
+<title>std::forward&lt;Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="131.6" y="149" width="6.1" height="15.0" fill="rgb(247,197,47)" rx="2" ry="2" />
+<text  x="134.65" y="159.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::findFreeBed (50,505,050 samples, 2.58%)</title><rect x="247.2" y="197" width="30.4" height="15.0" fill="rgb(235,138,33)" rx="2" ry="2" />
+<text  x="250.22" y="207.5" >Ho..</text>
+</g>
+<g >
+<title>HospitalSystem::findEquipment (10,101,010 samples, 0.52%)</title><rect x="381.0" y="197" width="6.1" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="384.03" y="207.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.52%)</title><rect x="1165.7" y="245" width="6.1" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1168.67" y="255.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt;::_M_realloc_insert&lt;Doctor&gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="165" width="6.0" height="15.0" fill="rgb(240,161,38)" rx="2" ry="2" />
+<text  x="128.57" y="175.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;OperatingRoom, std::allocator&lt;OperatingRoom&gt; &gt;::_M_realloc_insert&lt;OperatingRoom&gt; (10,101,010 samples, 0.52%)</title><rect x="229.0" y="165" width="6.1" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="231.97" y="175.5" ></text>
+</g>
+<g >
+<title>std::_Destroy_aux&lt;false&gt;::__destroy&lt;Equipment*&gt; (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="149" width="6.1" height="15.0" fill="rgb(243,177,42)" rx="2" ry="2" />
+<text  x="1083.52" y="159.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.52%)</title><rect x="746.0" y="197" width="6.1" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
+<text  x="748.98" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="928.5" y="197" width="6.0" height="15.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="931.45" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt;::base (20,202,020 samples, 1.03%)</title><rect x="308.0" y="181" width="12.2" height="15.0" fill="rgb(246,189,45)" rx="2" ry="2" />
+<text  x="311.04" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt; (90,909,090 samples, 4.64%)</title><rect x="752.1" y="197" width="54.7" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="755.06" y="207.5" >__gnu..</text>
+</g>
+<g >
+<title>std::__relocate_a_1&lt;Nurse*, Nurse*, std::allocator&lt;Nurse&gt; &gt; (60,606,060 samples, 3.09%)</title><rect x="186.4" y="101" width="36.5" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="189.39" y="111.5" >std..</text>
+</g>
+<g >
+<title>__gnu_cxx::operator&lt; &lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="1050.1" y="101" width="6.1" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="1053.10" y="111.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::base (30,303,030 samples, 1.55%)</title><rect x="788.6" y="181" width="18.2" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="791.56" y="191.5" ></text>
+</g>
+<g >
+<title>std::__relocate_object_a&lt;Nurse, Nurse, std::allocator&lt;Nurse&gt; &gt; (30,303,030 samples, 1.55%)</title><rect x="204.6" y="85" width="18.3" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="207.64" y="95.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt;::end (10,101,010 samples, 0.52%)</title><rect x="958.9" y="197" width="6.0" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="961.87" y="207.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_partition_pivot&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1056.2" y="149" width="6.1" height="15.0" fill="rgb(239,156,37)" rx="2" ry="2" />
+<text  x="1059.19" y="159.5" ></text>
+</g>
+<g >
+<title>Equipment::~Equipment (10,101,010 samples, 0.52%)</title><rect x="28.2" y="213" width="6.1" height="15.0" fill="rgb(250,209,50)" rx="2" ry="2" />
+<text  x="31.25" y="223.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator++ (50,505,050 samples, 2.58%)</title><rect x="1104.8" y="213" width="30.5" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="1107.85" y="223.5" >__..</text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt;::operator++ (20,202,020 samples, 1.03%)</title><rect x="885.9" y="181" width="12.1" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
+<text  x="888.88" y="191.5" ></text>
+</g>
+<g >
+<title>all (1,959,595,940 samples, 100%)</title><rect x="10.0" y="277" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="287.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt;::end (10,101,010 samples, 0.52%)</title><rect x="119.5" y="149" width="6.1" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
+<text  x="122.48" y="159.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;Patient&gt;::construct&lt;Patient, Patient&gt; (10,101,010 samples, 0.52%)</title><rect x="356.7" y="149" width="6.1" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="359.70" y="159.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt;::_M_realloc_insert&lt;EREntry&gt; (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="165" width="6.1" height="15.0" fill="rgb(238,154,37)" rx="2" ry="2" />
+<text  x="1065.27" y="175.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (20,202,020 samples, 1.03%)</title><rect x="1050.1" y="165" width="12.2" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1053.10" y="175.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt;::base (30,303,030 samples, 1.55%)</title><rect x="673.0" y="181" width="18.2" height="15.0" fill="rgb(246,189,45)" rx="2" ry="2" />
+<text  x="675.99" y="191.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;Equipment*, Equipment*, std::allocator&lt;Equipment&gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="143.8" y="117" width="12.2" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="146.81" y="127.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::to_string (10,101,010 samples, 0.52%)</title><rect x="1153.5" y="213" width="6.1" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="1156.51" y="223.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1050.1" y="149" width="6.1" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1053.10" y="159.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="898.0" y="181" width="6.1" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="901.04" y="191.5" ></text>
+</g>
+<g >
+<title>Patient::~Patient (10,101,010 samples, 0.52%)</title><rect x="368.9" y="37" width="6.0" height="15.0" fill="rgb(233,130,31)" rx="2" ry="2" />
+<text  x="371.87" y="47.5" ></text>
+</g>
+<g >
+<title>malloc (10,101,010 samples, 0.52%)</title><rect x="1171.8" y="245" width="6.0" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="1174.75" y="255.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;Doctor*, Doctor*, std::allocator&lt;Doctor&gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="117" width="6.0" height="15.0" fill="rgb(237,150,36)" rx="2" ry="2" />
+<text  x="128.57" y="127.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt;::_S_max_size (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="117" width="6.1" height="15.0" fill="rgb(206,8,2)" rx="2" ry="2" />
+<text  x="1065.27" y="127.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt;::__normal_iterator (10,101,010 samples, 0.52%)</title><rect x="222.9" y="133" width="6.1" height="15.0" fill="rgb(247,196,47)" rx="2" ry="2" />
+<text  x="225.89" y="143.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt;::emplace_back&lt;Bed&gt; (30,303,030 samples, 1.55%)</title><rect x="107.3" y="181" width="18.3" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="110.32" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1056.2" y="117" width="6.1" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="1059.19" y="127.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt;::_S_relocate (10,101,010 samples, 0.52%)</title><rect x="125.6" y="149" width="6.0" height="15.0" fill="rgb(217,58,14)" rx="2" ry="2" />
+<text  x="128.57" y="159.5" ></text>
+</g>
+<g >
+<title>std::_Destroy&lt;Equipment*, Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="181" width="6.1" height="15.0" fill="rgb(243,175,42)" rx="2" ry="2" />
+<text  x="1083.52" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="557.4" y="181" width="12.2" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="560.42" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt;::base (10,101,010 samples, 0.52%)</title><rect x="898.0" y="165" width="6.1" height="15.0" fill="rgb(246,189,45)" rx="2" ry="2" />
+<text  x="901.04" y="175.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Bed*, std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.52%)</title><rect x="703.4" y="197" width="6.1" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="706.40" y="207.5" ></text>
+</g>
+<g >
+<title>std::__relocate_object_a&lt;Doctor, Doctor, std::allocator&lt;Doctor&gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="85" width="6.0" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="128.57" y="95.5" ></text>
+</g>
+<g >
+<title>[traditional] (10,101,010 samples, 0.52%)</title><rect x="70.8" y="181" width="6.1" height="15.0" fill="rgb(208,17,4)" rx="2" ry="2" />
+<text  x="73.82" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::__val_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="995.4" y="133" width="6.0" height="15.0" fill="rgb(224,90,21)" rx="2" ry="2" />
+<text  x="998.36" y="143.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="983.2" y="133" width="6.1" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="986.20" y="143.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::allocateEquipment (30,303,030 samples, 1.55%)</title><rect x="374.9" y="213" width="18.3" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="377.95" y="223.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;Patient*, Patient*, std::allocator&lt;Patient&gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="362.8" y="117" width="12.1" height="15.0" fill="rgb(233,131,31)" rx="2" ry="2" />
+<text  x="365.78" y="127.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator* (30,303,030 samples, 1.55%)</title><rect x="1086.6" y="213" width="18.2" height="15.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="1089.60" y="223.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::base (10,101,010 samples, 0.52%)</title><rect x="952.8" y="181" width="6.1" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="955.78" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="320.2" y="181" width="6.1" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="323.21" y="191.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_linear_insert&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Val_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1044.0" y="133" width="6.1" height="15.0" fill="rgb(246,193,46)" rx="2" ry="2" />
+<text  x="1047.02" y="143.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt;::max_size (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="133" width="6.1" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="1065.27" y="143.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::_S_relocate (20,202,020 samples, 1.03%)</title><rect x="143.8" y="149" width="12.2" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="146.81" y="159.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Doctor&gt; &gt;::construct&lt;Doctor, Doctor&gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="69" width="6.0" height="15.0" fill="rgb(228,106,25)" rx="2" ry="2" />
+<text  x="128.57" y="79.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_Alloc_hider::_Alloc_hider (10,101,010 samples, 0.52%)</title><rect x="1153.5" y="197" width="6.1" height="15.0" fill="rgb(212,32,7)" rx="2" ry="2" />
+<text  x="1156.51" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt;::operator++ (20,202,020 samples, 1.03%)</title><rect x="545.3" y="181" width="12.1" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="548.26" y="191.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::push_back (60,606,060 samples, 3.09%)</title><rect x="131.6" y="197" width="36.5" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="134.65" y="207.5" >std..</text>
+</g>
+<g >
+<title>std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt;::emplace_back&lt;Patient&gt; (30,303,030 samples, 1.55%)</title><rect x="356.7" y="181" width="18.2" height="15.0" fill="rgb(211,29,7)" rx="2" ry="2" />
+<text  x="359.70" y="191.5" ></text>
+</g>
+<g >
+<title>std::sort&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, HospitalSystem::handleERAdmission (151,515,150 samples, 7.73%)</title><rect x="971.0" y="197" width="91.3" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="974.03" y="207.5" >std::sort&lt;..</text>
+</g>
+<g >
+<title>std::__detail::__to_chars_10_impl&lt;unsigned int&gt; (10,101,010 samples, 0.52%)</title><rect x="83.0" y="197" width="6.1" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="85.99" y="207.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::~basic_string (10,101,010 samples, 0.52%)</title><rect x="332.4" y="197" width="6.1" height="15.0" fill="rgb(248,201,48)" rx="2" ry="2" />
+<text  x="335.37" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator- (10,101,010 samples, 0.52%)</title><rect x="162.1" y="149" width="6.0" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="165.06" y="159.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt;::emplace_back&lt;EREntry&gt; (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="181" width="6.1" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="1065.27" y="191.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt;::emplace_back&lt;Doctor&gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="181" width="6.0" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="128.57" y="191.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;OperatingRoom, std::allocator&lt;OperatingRoom&gt; &gt;::_M_check_len (10,101,010 samples, 0.52%)</title><rect x="229.0" y="149" width="6.1" height="15.0" fill="rgb(214,44,10)" rx="2" ry="2" />
+<text  x="231.97" y="159.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string (10,101,010 samples, 0.52%)</title><rect x="356.7" y="133" width="6.1" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="359.70" y="143.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt;::_S_do_relocate (20,202,020 samples, 1.03%)</title><rect x="362.8" y="133" width="12.1" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="365.78" y="143.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;Nurse&gt;::destroy&lt;Nurse&gt; (20,202,020 samples, 1.03%)</title><rect x="204.6" y="69" width="12.2" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
+<text  x="207.64" y="79.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_insertion_sort&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1044.0" y="149" width="6.1" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="1047.02" y="159.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::stoi (30,303,030 samples, 1.55%)</title><rect x="338.5" y="197" width="18.2" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="341.45" y="207.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt;::_M_check_len (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="149" width="6.1" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="1065.27" y="159.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Equipment&gt; &gt;::construct&lt;Equipment, Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="131.6" y="165" width="6.1" height="15.0" fill="rgb(224,90,21)" rx="2" ry="2" />
+<text  x="134.65" y="175.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt;::push_back (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="197" width="6.1" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="1065.27" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator++ (30,303,030 samples, 1.55%)</title><rect x="727.7" y="197" width="18.3" height="15.0" fill="rgb(237,150,35)" rx="2" ry="2" />
+<text  x="730.73" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;Patient&gt;::destroy&lt;Patient&gt; (10,101,010 samples, 0.52%)</title><rect x="368.9" y="53" width="6.0" height="15.0" fill="rgb(229,114,27)" rx="2" ry="2" />
+<text  x="371.87" y="63.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a_1&lt;Doctor*, Doctor*, std::allocator&lt;Doctor&gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="101" width="6.0" height="15.0" fill="rgb(207,11,2)" rx="2" ry="2" />
+<text  x="128.57" y="111.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::findPatient (50,505,050 samples, 2.58%)</title><rect x="873.7" y="197" width="30.4" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="876.71" y="207.5" >Ho..</text>
+</g>
+<g >
+<title>std::__final_insertion_sort&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (131,313,130 samples, 6.70%)</title><rect x="971.0" y="165" width="79.1" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="974.03" y="175.5" >std::__fi..</text>
+</g>
+<g >
+<title>HospitalSystem::assignNurseToDept (222,222,220 samples, 11.34%)</title><rect x="441.9" y="213" width="133.8" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="444.86" y="223.5" >HospitalSystem::..</text>
+</g>
+<g >
+<title>HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1007.5" y="117" width="6.1" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="1010.53" y="127.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Doctor*, std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="1074.4" y="197" width="6.1" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="1077.43" y="207.5" ></text>
+</g>
+<g >
+<title>traditional (1,959,595,940 samples, 100.00%)</title><rect x="10.0" y="261" width="1180.0" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="13.00" y="271.5" >traditional</text>
+</g>
+<g >
+<title>HospitalSystem::findNurse (202,020,200 samples, 10.31%)</title><rect x="447.9" y="197" width="121.7" height="15.0" fill="rgb(211,31,7)" rx="2" ry="2" />
+<text  x="450.94" y="207.5" >HospitalSystem:..</text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Bed*, std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.52%)</title><rect x="265.5" y="181" width="6.0" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="268.46" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::base (40,404,040 samples, 2.06%)</title><rect x="904.1" y="197" width="24.4" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="907.12" y="207.5" >_..</text>
+</g>
+<g >
+<title>std::_Destroy&lt;Equipment*&gt; (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="165" width="6.1" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="1083.52" y="175.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::admitPatient (222,222,220 samples, 11.34%)</title><rect x="241.1" y="213" width="133.8" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="244.13" y="223.5" >HospitalSystem::..</text>
+</g>
+<g >
+<title>std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt;::push_back (40,404,040 samples, 2.06%)</title><rect x="101.2" y="197" width="24.4" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="104.24" y="207.5" >s..</text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Nurse&gt; &gt;::construct&lt;Nurse, Nurse&gt; (10,101,010 samples, 0.52%)</title><rect x="216.8" y="69" width="6.1" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="219.80" y="79.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;Nurse*, Nurse*, std::allocator&lt;Nurse&gt; &gt; (60,606,060 samples, 3.09%)</title><rect x="186.4" y="117" width="36.5" height="15.0" fill="rgb(209,20,4)" rx="2" ry="2" />
+<text  x="189.39" y="127.5" >std..</text>
+</g>
+<g >
+<title>[libc.so.6] (1,919,191,900 samples, 97.94%)</title><rect x="10.0" y="245" width="1155.7" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="13.00" y="255.5" >[libc.so.6]</text>
+</g>
+<g >
+<title>std::__insertion_sort&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (121,212,120 samples, 6.19%)</title><rect x="971.0" y="149" width="73.0" height="15.0" fill="rgb(226,97,23)" rx="2" ry="2" />
+<text  x="974.03" y="159.5" >std::__i..</text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::back (20,202,020 samples, 1.03%)</title><rect x="156.0" y="165" width="12.1" height="15.0" fill="rgb(210,23,5)" rx="2" ry="2" />
+<text  x="158.98" y="175.5" ></text>
+</g>
+<g >
+<title>main (1,898,989,880 samples, 96.91%)</title><rect x="22.2" y="229" width="1143.5" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
+<text  x="25.16" y="239.5" >main</text>
+</g>
+<g >
+<title>std::forward&lt;Doctor&gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="37" width="6.0" height="15.0" fill="rgb(249,202,48)" rx="2" ry="2" />
+<text  x="128.57" y="47.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_Alloc_hider::_Alloc_hider (10,101,010 samples, 0.52%)</title><rect x="76.9" y="181" width="6.1" height="15.0" fill="rgb(212,32,7)" rx="2" ry="2" />
+<text  x="79.91" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt;::base (10,101,010 samples, 0.52%)</title><rect x="563.5" y="165" width="6.1" height="15.0" fill="rgb(222,79,18)" rx="2" ry="2" />
+<text  x="566.51" y="175.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a_1&lt;Patient*, Patient*, std::allocator&lt;Patient&gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="362.8" y="101" width="12.1" height="15.0" fill="rgb(253,222,53)" rx="2" ry="2" />
+<text  x="365.78" y="111.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::back (10,101,010 samples, 0.52%)</title><rect x="222.9" y="165" width="6.1" height="15.0" fill="rgb(226,100,24)" rx="2" ry="2" />
+<text  x="225.89" y="175.5" ></text>
+</g>
+<g >
+<title>std::_Destroy&lt;Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="133" width="6.1" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="1083.52" y="143.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::operator= (10,101,010 samples, 0.52%)</title><rect x="1031.9" y="117" width="6.0" height="15.0" fill="rgb(226,100,24)" rx="2" ry="2" />
+<text  x="1034.86" y="127.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt;::_S_do_relocate (10,101,010 samples, 0.52%)</title><rect x="125.6" y="133" width="6.0" height="15.0" fill="rgb(241,165,39)" rx="2" ry="2" />
+<text  x="128.57" y="143.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::_Val_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="989.3" y="133" width="6.1" height="15.0" fill="rgb(245,184,44)" rx="2" ry="2" />
+<text  x="992.28" y="143.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::base (20,202,020 samples, 1.03%)</title><rect x="709.5" y="197" width="12.1" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="712.48" y="207.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::_M_realloc_insert&lt;Equipment&gt; (30,303,030 samples, 1.55%)</title><rect x="137.7" y="165" width="18.3" height="15.0" fill="rgb(236,146,34)" rx="2" ry="2" />
+<text  x="140.73" y="175.5" ></text>
+</g>
+<g >
+<title>std::__relocate_object_a&lt;Equipment, Equipment, std::allocator&lt;Equipment&gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="143.8" y="85" width="6.1" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="146.81" y="95.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="539.2" y="181" width="6.1" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="542.18" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="691.2" y="181" width="6.1" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="694.24" y="191.5" ></text>
+</g>
+<g >
+<title>__errno_location (10,101,010 samples, 0.52%)</title><rect x="350.6" y="165" width="6.1" height="15.0" fill="rgb(233,130,31)" rx="2" ry="2" />
+<text  x="353.62" y="175.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::_M_realloc_insert&lt;Nurse&gt; (60,606,060 samples, 3.09%)</title><rect x="186.4" y="165" width="36.5" height="15.0" fill="rgb(211,31,7)" rx="2" ry="2" />
+<text  x="189.39" y="175.5" >std..</text>
+</g>
+<g >
+<title>std::move&lt;EREntry&amp;&gt; (10,101,010 samples, 0.52%)</title><rect x="1037.9" y="117" width="6.1" height="15.0" fill="rgb(207,10,2)" rx="2" ry="2" />
+<text  x="1040.94" y="127.5" ></text>
+</g>
+<g >
+<title>std::move&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;&amp;&gt; (10,101,010 samples, 0.52%)</title><rect x="1159.6" y="197" width="6.1" height="15.0" fill="rgb(222,78,18)" rx="2" ry="2" />
+<text  x="1162.59" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Doctor*, std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt; &gt; (50,505,050 samples, 2.58%)</title><rect x="411.4" y="181" width="30.5" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="414.44" y="191.5" >__..</text>
+</g>
+<g >
+<title>std::forward&lt;Nurse&gt; (10,101,010 samples, 0.52%)</title><rect x="216.8" y="53" width="6.1" height="15.0" fill="rgb(206,5,1)" rx="2" ry="2" />
+<text  x="219.80" y="63.5" ></text>
+</g>
+<g >
+<title>std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="89.1" y="197" width="12.1" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="92.07" y="207.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::assignDoctorShift (80,808,080 samples, 4.12%)</title><rect x="393.2" y="213" width="48.7" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="396.20" y="223.5" >Hosp..</text>
+</g>
+<g >
+<title>HospitalSystem::scheduleOR (20,202,020 samples, 1.03%)</title><rect x="1068.4" y="213" width="12.1" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="1071.35" y="223.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="156.0" y="149" width="6.1" height="15.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="158.98" y="159.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::_S_relocate (60,606,060 samples, 3.09%)</title><rect x="186.4" y="149" width="36.5" height="15.0" fill="rgb(232,125,29)" rx="2" ry="2" />
+<text  x="189.39" y="159.5" >std..</text>
+</g>
+<g >
+<title>HospitalSystem::findPatient (70,707,070 samples, 3.61%)</title><rect x="654.7" y="197" width="42.6" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="657.74" y="207.5" >Hosp..</text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="879.8" y="181" width="6.1" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="882.79" y="191.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;OperatingRoom, std::allocator&lt;OperatingRoom&gt; &gt;::end (10,101,010 samples, 0.52%)</title><rect x="235.1" y="165" width="6.0" height="15.0" fill="rgb(249,204,48)" rx="2" ry="2" />
+<text  x="238.05" y="175.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::emplace_back&lt;Equipment&gt; (60,606,060 samples, 3.09%)</title><rect x="131.6" y="181" width="36.5" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="134.65" y="191.5" >std..</text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string&lt;std::allocator&lt;char&gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="64.7" y="197" width="6.1" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="67.74" y="207.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Equipment&gt; &gt;::construct&lt;Equipment, Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="143.8" y="69" width="6.1" height="15.0" fill="rgb(224,90,21)" rx="2" ry="2" />
+<text  x="146.81" y="79.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt; (40,404,040 samples, 2.06%)</title><rect x="934.5" y="197" width="24.4" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="937.54" y="207.5" >_..</text>
+</g>
+<g >
+<title>HospitalSystem::handleERAdmission (171,717,170 samples, 8.76%)</title><rect x="964.9" y="213" width="103.5" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="967.95" y="223.5" >HospitalSyst..</text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="569.6" y="197" width="6.1" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="572.59" y="207.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (10,101,010 samples, 0.52%)</title><rect x="64.7" y="181" width="6.1" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="67.74" y="191.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::findOR (10,101,010 samples, 0.52%)</title><rect x="1068.4" y="197" width="6.0" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="1071.35" y="207.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::_M_check_len (10,101,010 samples, 0.52%)</title><rect x="137.7" y="149" width="6.1" height="15.0" fill="rgb(206,8,2)" rx="2" ry="2" />
+<text  x="140.73" y="159.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;OperatingRoom, std::allocator&lt;OperatingRoom&gt; &gt;::emplace_back&lt;OperatingRoom&gt; (20,202,020 samples, 1.03%)</title><rect x="229.0" y="181" width="12.1" height="15.0" fill="rgb(249,202,48)" rx="2" ry="2" />
+<text  x="231.97" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="387.1" y="197" width="6.1" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="390.11" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="721.6" y="197" width="6.1" height="15.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="724.65" y="207.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::~HospitalSystem (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="213" width="6.1" height="15.0" fill="rgb(216,50,12)" rx="2" ry="2" />
+<text  x="1083.52" y="223.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_replace (20,202,020 samples, 1.03%)</title><rect x="1177.8" y="245" width="12.2" height="15.0" fill="rgb(226,98,23)" rx="2" ry="2" />
+<text  x="1180.84" y="255.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::findPatient (80,808,080 samples, 4.12%)</title><rect x="277.6" y="197" width="48.7" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="280.63" y="207.5" >Hosp..</text>
+</g>
+<g >
+<title>std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt;::_S_relocate (20,202,020 samples, 1.03%)</title><rect x="362.8" y="149" width="12.1" height="15.0" fill="rgb(248,199,47)" rx="2" ry="2" />
+<text  x="365.78" y="159.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;::operator* (30,303,030 samples, 1.55%)</title><rect x="1013.6" y="117" width="18.3" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="1016.61" y="127.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Equipment&gt; &gt;::destroy&lt;Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="149.9" y="85" width="6.1" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="152.90" y="95.5" ></text>
+</g>
+<g >
+<title>std::operator+&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="1159.6" y="213" width="6.1" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="1162.59" y="223.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt;::_M_realloc_insert&lt;Patient&gt; (20,202,020 samples, 1.03%)</title><rect x="362.8" y="165" width="12.1" height="15.0" fill="rgb(235,142,34)" rx="2" ry="2" />
+<text  x="365.78" y="175.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Doctor, std::allocator&lt;Doctor&gt; &gt;::push_back (10,101,010 samples, 0.52%)</title><rect x="125.6" y="197" width="6.0" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="128.57" y="207.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::_S_do_relocate (60,606,060 samples, 3.09%)</title><rect x="186.4" y="133" width="36.5" height="15.0" fill="rgb(205,2,0)" rx="2" ry="2" />
+<text  x="189.39" y="143.5" >std..</text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::push_back (101,010,100 samples, 5.15%)</title><rect x="168.1" y="197" width="60.9" height="15.0" fill="rgb(219,65,15)" rx="2" ry="2" />
+<text  x="171.14" y="207.5" >std::v..</text>
+</g>
+<g >
+<title>std::vector&lt;OperatingRoom, std::allocator&lt;OperatingRoom&gt; &gt;::size (10,101,010 samples, 0.52%)</title><rect x="229.0" y="133" width="6.1" height="15.0" fill="rgb(246,192,45)" rx="2" ry="2" />
+<text  x="231.97" y="143.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt;::push_back (30,303,030 samples, 1.55%)</title><rect x="356.7" y="197" width="18.2" height="15.0" fill="rgb(235,138,33)" rx="2" ry="2" />
+<text  x="359.70" y="207.5" ></text>
+</g>
+<g >
+<title>EREntry::EREntry (10,101,010 samples, 0.52%)</title><rect x="1001.4" y="117" width="6.1" height="15.0" fill="rgb(215,49,11)" rx="2" ry="2" />
+<text  x="1004.44" y="127.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::end (10,101,010 samples, 0.52%)</title><rect x="222.9" y="149" width="6.1" height="15.0" fill="rgb(208,15,3)" rx="2" ry="2" />
+<text  x="225.89" y="159.5" ></text>
+</g>
+<g >
+<title>std::__relocate_object_a&lt;Patient, Patient, std::allocator&lt;Patient&gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="362.8" y="85" width="12.1" height="15.0" fill="rgb(236,143,34)" rx="2" ry="2" />
+<text  x="365.78" y="95.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt;::emplace_back&lt;Nurse&gt; (80,808,080 samples, 4.12%)</title><rect x="180.3" y="181" width="48.7" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="183.31" y="191.5" >std:..</text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string (10,101,010 samples, 0.52%)</title><rect x="58.7" y="197" width="6.0" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="61.66" y="207.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_linear_insert&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Val_comp_iter&lt;HospitalSystem::handleERAdmission (70,707,070 samples, 3.61%)</title><rect x="1001.4" y="133" width="42.6" height="15.0" fill="rgb(246,193,46)" rx="2" ry="2" />
+<text  x="1004.44" y="143.5" >std:..</text>
+</g>
+<g >
+<title>std::__cxx11::to_string (20,202,020 samples, 1.03%)</title><rect x="70.8" y="197" width="12.2" height="15.0" fill="rgb(213,38,9)" rx="2" ry="2" />
+<text  x="73.82" y="207.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_partition&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1050.1" y="117" width="6.1" height="15.0" fill="rgb(233,130,31)" rx="2" ry="2" />
+<text  x="1053.10" y="127.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::dischargePatient (383,838,380 samples, 19.59%)</title><rect x="575.7" y="213" width="231.1" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="578.67" y="223.5" >HospitalSystem::dischargePatient</text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::~vector (10,101,010 samples, 0.52%)</title><rect x="1080.5" y="197" width="6.1" height="15.0" fill="rgb(229,112,26)" rx="2" ry="2" />
+<text  x="1083.52" y="207.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;OperatingRoom, std::allocator&lt;OperatingRoom&gt; &gt;::push_back (20,202,020 samples, 1.03%)</title><rect x="229.0" y="197" width="12.1" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="231.97" y="207.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Nurse*, std::vector&lt;Nurse, std::allocator&lt;Nurse&gt; &gt; &gt;::base (20,202,020 samples, 1.03%)</title><rect x="527.0" y="181" width="12.2" height="15.0" fill="rgb(222,79,18)" rx="2" ry="2" />
+<text  x="530.01" y="191.5" ></text>
+</g>
+<g >
+<title>std::min&lt;unsigned long&gt; (10,101,010 samples, 0.52%)</title><rect x="1062.3" y="101" width="6.1" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="1065.27" y="111.5" ></text>
+</g>
+<g >
+<title>HospitalSystem::HospitalSystem (343,434,340 samples, 17.53%)</title><rect x="34.3" y="213" width="206.8" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="37.33" y="223.5" >HospitalSystem::HospitalSys..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.52%)</title><rect x="1165.7" y="229" width="6.1" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1168.67" y="239.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;Doctor&gt;::construct&lt;Doctor, Doctor&gt; (10,101,010 samples, 0.52%)</title><rect x="125.6" y="53" width="6.0" height="15.0" fill="rgb(245,184,44)" rx="2" ry="2" />
+<text  x="128.57" y="63.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Patient&gt; &gt;::construct&lt;Patient, Patient&gt; (10,101,010 samples, 0.52%)</title><rect x="356.7" y="165" width="6.1" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="359.70" y="175.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a_1&lt;Equipment*, Equipment*, std::allocator&lt;Equipment&gt; &gt; (20,202,020 samples, 1.03%)</title><rect x="143.8" y="101" width="12.2" height="15.0" fill="rgb(254,226,54)" rx="2" ry="2" />
+<text  x="146.81" y="111.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt;::back (10,101,010 samples, 0.52%)</title><rect x="119.5" y="165" width="6.1" height="15.0" fill="rgb(210,23,5)" rx="2" ry="2" />
+<text  x="122.48" y="175.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_partition&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1056.2" y="133" width="6.1" height="15.0" fill="rgb(233,130,31)" rx="2" ry="2" />
+<text  x="1059.19" y="143.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;Patient&gt; &gt;::destroy&lt;Patient&gt; (10,101,010 samples, 0.52%)</title><rect x="368.9" y="69" width="6.0" height="15.0" fill="rgb(212,36,8)" rx="2" ry="2" />
+<text  x="371.87" y="79.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;Bed*, std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt; &gt;::operator* (10,101,010 samples, 0.52%)</title><rect x="697.3" y="197" width="6.1" height="15.0" fill="rgb(246,193,46)" rx="2" ry="2" />
+<text  x="700.32" y="207.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::operator= (10,101,010 samples, 0.52%)</title><rect x="1165.7" y="213" width="6.1" height="15.0" fill="rgb(226,100,24)" rx="2" ry="2" />
+<text  x="1168.67" y="223.5" ></text>
+</g>
+<g >
+<title>std::__sort&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (151,515,150 samples, 7.73%)</title><rect x="971.0" y="181" width="91.3" height="15.0" fill="rgb(215,49,11)" rx="2" ry="2" />
+<text  x="974.03" y="191.5" >std::__sor..</text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;Equipment&gt;::construct&lt;Equipment, Equipment&gt; (10,101,010 samples, 0.52%)</title><rect x="143.8" y="53" width="6.1" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
+<text  x="146.81" y="63.5" ></text>
+</g>
+<g >
+<title>EREntry::operator= (10,101,010 samples, 0.52%)</title><rect x="977.1" y="133" width="6.1" height="15.0" fill="rgb(212,32,7)" rx="2" ry="2" />
+<text  x="980.11" y="143.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Equipment*, std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt; &gt; (30,303,030 samples, 1.55%)</title><rect x="1135.3" y="213" width="18.2" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="1138.26" y="223.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_partition_pivot&lt;__gnu_cxx::__normal_iterator&lt;EREntry*, std::vector&lt;EREntry, std::allocator&lt;EREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;HospitalSystem::handleERAdmission (10,101,010 samples, 0.52%)</title><rect x="1050.1" y="133" width="6.1" height="15.0" fill="rgb(239,156,37)" rx="2" ry="2" />
+<text  x="1053.10" y="143.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Bed*, std::vector&lt;Bed, std::allocator&lt;Bed&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="271.5" y="181" width="6.1" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="274.55" y="191.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;Patient*, std::vector&lt;Patient, std::allocator&lt;Patient&gt; &gt; &gt; (10,101,010 samples, 0.52%)</title><rect x="326.3" y="197" width="6.1" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="329.29" y="207.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;Equipment, std::allocator&lt;Equipment&gt; &gt;::size (10,101,010 samples, 0.52%)</title><rect x="137.7" y="133" width="6.1" height="15.0" fill="rgb(238,155,37)" rx="2" ry="2" />
+<text  x="140.73" y="143.5" ></text>
+</g>
+</g>
+</svg>

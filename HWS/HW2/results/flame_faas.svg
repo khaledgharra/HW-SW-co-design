@@ -1,0 +1,1542 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="1062" onload="init(evt)" viewBox="0 0 1200 1062" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="1062.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >FaaS Hospital System</text>
+<text id="details" x="10.00" y="1045" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="1045" > </text>
+<g id="frames">
+<g >
+<title>fn_generate_bill (252,525,250 samples, 9.92%)</title><rect x="656.2" y="853" width="117.1" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="659.19" y="863.5" >fn_generate_bill</text>
+</g>
+<g >
+<title>std::_Function_base::_Base_manager&lt;make_dispatcher (10,101,010 samples, 0.40%)</title><rect x="66.2" y="901" width="4.7" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="69.19" y="911.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="946.5" y="885" width="4.7" height="15.0" fill="rgb(210,23,5)" rx="2" ry="2" />
+<text  x="949.51" y="895.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt;::operator* (20,202,020 samples, 0.79%)</title><rect x="84.9" y="853" width="9.4" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="87.92" y="863.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="309" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="319.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (20,202,020 samples, 0.79%)</title><rect x="871.6" y="853" width="9.4" height="15.0" fill="rgb(248,198,47)" rx="2" ry="2" />
+<text  x="874.59" y="863.5" ></text>
+</g>
+<g >
+<title>DBPatient::DBPatient (20,202,020 samples, 0.79%)</title><rect x="276.9" y="773" width="9.4" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="279.90" y="783.5" ></text>
+</g>
+<g >
+<title>std::any::has_value (20,202,020 samples, 0.79%)</title><rect x="1133.8" y="917" width="9.4" height="15.0" fill="rgb(207,13,3)" rx="2" ry="2" />
+<text  x="1136.81" y="927.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="245" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="255.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Select1st::operator (10,101,010 samples, 0.40%)</title><rect x="895.0" y="869" width="4.7" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="898.00" y="879.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="773" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="783.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (70,707,070 samples, 2.78%)</title><rect x="862.2" y="869" width="32.8" height="15.0" fill="rgb(248,198,47)" rx="2" ry="2" />
+<text  x="865.22" y="879.5" >st..</text>
+</g>
+<g >
+<title>std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt;::emplace_back&lt;DBBed&gt; (20,202,020 samples, 0.79%)</title><rect x="974.6" y="917" width="9.4" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="977.60" y="927.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_replace (10,101,010 samples, 0.40%)</title><rect x="1185.3" y="981" width="4.7" height="15.0" fill="rgb(226,98,23)" rx="2" ry="2" />
+<text  x="1188.32" y="991.5" ></text>
+</g>
+<g >
+<title>std::__invoke_r&lt;std::any, make_dispatcher (1,616,161,600 samples, 63.49%)</title><rect x="70.9" y="901" width="749.2" height="15.0" fill="rgb(246,192,45)" rx="2" ry="2" />
+<text  x="73.87" y="911.5" >std::__invoke_r&lt;std::any, make_dispatcher</text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::~basic_string (10,101,010 samples, 0.40%)</title><rect x="628.1" y="757" width="4.7" height="15.0" fill="rgb(248,201,48)" rx="2" ry="2" />
+<text  x="631.10" y="767.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="543.8" y="821" width="4.7" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="546.81" y="831.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="773.3" y="837" width="4.6" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="776.25" y="847.5" ></text>
+</g>
+<g >
+<title>std::iter_swap&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="646.8" y="757" width="4.7" height="15.0" fill="rgb(234,133,32)" rx="2" ry="2" />
+<text  x="649.83" y="767.5" ></text>
+</g>
+<g >
+<title>std::function&lt;std::any  (1,686,868,670 samples, 66.27%)</title><rect x="52.1" y="933" width="782.0" height="15.0" fill="rgb(205,0,0)" rx="2" ry="2" />
+<text  x="55.14" y="943.5" >std::function&lt;std::any </text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="949" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="959.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="759.2" y="821" width="4.7" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="762.21" y="831.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string (10,101,010 samples, 0.40%)</title><rect x="623.4" y="757" width="4.7" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="626.41" y="767.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::end (10,101,010 samples, 0.40%)</title><rect x="768.6" y="837" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="771.57" y="847.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;DBPatient&gt; &gt;::construct&lt;DBPatient, DBPatient&gt; (20,202,020 samples, 0.79%)</title><rect x="276.9" y="805" width="9.4" height="15.0" fill="rgb(226,100,24)" rx="2" ry="2" />
+<text  x="279.90" y="815.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="853" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="863.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="389" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="399.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::operator* (60,606,060 samples, 2.38%)</title><rect x="103.7" y="853" width="28.0" height="15.0" fill="rgb(225,92,22)" rx="2" ry="2" />
+<text  x="106.65" y="863.5" >_..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="741" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="751.5" ></text>
+</g>
+<g >
+<title>std::any::_Manager_internal&lt;ERResult&gt;::_S_manage (10,101,010 samples, 0.40%)</title><rect x="1129.1" y="917" width="4.7" height="15.0" fill="rgb(212,36,8)" rx="2" ry="2" />
+<text  x="1132.13" y="927.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt;::_S_relocate (10,101,010 samples, 0.40%)</title><rect x="974.6" y="885" width="4.7" height="15.0" fill="rgb(234,134,32)" rx="2" ry="2" />
+<text  x="977.60" y="895.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="534.4" y="837" width="14.1" height="15.0" fill="rgb(243,174,41)" rx="2" ry="2" />
+<text  x="537.44" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="117" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="127.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_ebo_helper&lt;1, std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, true&gt;::_M_cget (10,101,010 samples, 0.40%)</title><rect x="918.4" y="869" width="4.7" height="15.0" fill="rgb(214,41,9)" rx="2" ry="2" />
+<text  x="921.41" y="879.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="567.2" y="821" width="4.7" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="570.22" y="831.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="917" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="927.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="485" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="495.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::_M_check_len (10,101,010 samples, 0.40%)</title><rect x="1016.7" y="885" width="4.7" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
+<text  x="1019.75" y="895.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_S_copy_chars (10,101,010 samples, 0.40%)</title><rect x="965.2" y="917" width="4.7" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="968.24" y="927.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt;::operator* (30,303,030 samples, 1.19%)</title><rect x="183.3" y="853" width="14.0" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="186.25" y="863.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBNurse*, std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="178.6" y="853" width="4.7" height="15.0" fill="rgb(215,50,12)" rx="2" ry="2" />
+<text  x="181.57" y="863.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string (10,101,010 samples, 0.40%)</title><rect x="1054.2" y="949" width="4.7" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="1057.21" y="959.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="341" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="351.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBDoctor*, std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="342.5" y="821" width="4.6" height="15.0" fill="rgb(253,223,53)" rx="2" ry="2" />
+<text  x="345.46" y="831.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="213" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="223.5" ></text>
+</g>
+<g >
+<title>std::any_cast&lt;DischargeEvent&gt; (10,101,010 samples, 0.40%)</title><rect x="792.0" y="853" width="4.7" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="794.98" y="863.5" ></text>
+</g>
+<g >
+<title>fn_assign_nurse (202,020,200 samples, 7.94%)</title><rect x="347.1" y="853" width="93.7" height="15.0" fill="rgb(251,215,51)" rx="2" ry="2" />
+<text  x="350.14" y="863.5" >fn_assign_n..</text>
+</g>
+<g >
+<title>std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt;::emplace_back&lt;DBDoctor&gt; (30,303,030 samples, 1.19%)</title><rect x="984.0" y="917" width="14.0" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="986.97" y="927.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="101" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="111.5" ></text>
+</g>
+<g >
+<title>std::forward&lt;DBPatient&gt; (10,101,010 samples, 0.40%)</title><rect x="286.3" y="805" width="4.7" height="15.0" fill="rgb(248,200,48)" rx="2" ry="2" />
+<text  x="289.27" y="815.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::push_back (101,010,100 samples, 3.97%)</title><rect x="998.0" y="933" width="46.8" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="1001.02" y="943.5" >std:..</text>
+</g>
+<g >
+<title>std::any::any&lt;BillEvent&amp;, BillEvent, std::any::_Manager_internal&lt;BillEvent&gt;, void&gt; (10,101,010 samples, 0.40%)</title><rect x="1101.0" y="949" width="4.7" height="15.0" fill="rgb(219,65,15)" rx="2" ry="2" />
+<text  x="1104.03" y="959.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="757" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="767.5" ></text>
+</g>
+<g >
+<title>[libc.so.6] (10,101,010 samples, 0.40%)</title><rect x="1068.3" y="933" width="4.6" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1071.25" y="943.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt;::_M_realloc_insert&lt;DBPatient&gt; (10,101,010 samples, 0.40%)</title><rect x="291.0" y="805" width="4.6" height="15.0" fill="rgb(239,156,37)" rx="2" ry="2" />
+<text  x="293.95" y="815.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="42.8" y="901" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="45.78" y="911.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_partition&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="651.5" y="773" width="4.7" height="15.0" fill="rgb(240,165,39)" rx="2" ry="2" />
+<text  x="654.51" y="783.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBDoctor*, std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="202.0" y="853" width="4.7" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
+<text  x="204.98" y="863.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::operator* (20,202,020 samples, 0.79%)</title><rect x="525.1" y="837" width="9.3" height="15.0" fill="rgb(225,92,22)" rx="2" ry="2" />
+<text  x="528.08" y="847.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::size (10,101,010 samples, 0.40%)</title><rect x="881.0" y="837" width="4.6" height="15.0" fill="rgb(218,60,14)" rx="2" ry="2" />
+<text  x="883.95" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="885" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="895.5" ></text>
+</g>
+<g >
+<title>faas (2,545,454,520 samples, 100.00%)</title><rect x="10.0" y="997" width="1180.0" height="15.0" fill="rgb(208,16,3)" rx="2" ry="2" />
+<text  x="13.00" y="1007.5" >faas</text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (151,515,150 samples, 5.95%)</title><rect x="838.8" y="901" width="70.2" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="841.81" y="911.5" >std::_H..</text>
+</g>
+<g >
+<title>std::forward&lt;std::any const&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="806.0" y="869" width="4.7" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="809.03" y="879.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (252,525,250 samples, 9.92%)</title><rect x="834.1" y="917" width="117.1" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="837.13" y="927.5" >std::_Hashtabl..</text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::end (10,101,010 samples, 0.40%)</title><rect x="571.9" y="837" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="574.90" y="847.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::base (20,202,020 samples, 0.79%)</title><rect x="515.7" y="837" width="9.4" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="518.71" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="357" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="367.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="133" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="143.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_assign (10,101,010 samples, 0.40%)</title><rect x="777.9" y="853" width="4.7" height="15.0" fill="rgb(238,153,36)" rx="2" ry="2" />
+<text  x="780.94" y="863.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="253.5" y="837" width="4.7" height="15.0" fill="rgb(249,204,48)" rx="2" ry="2" />
+<text  x="256.49" y="847.5" ></text>
+</g>
+<g >
+<title>std::__relocate_object_a&lt;DBDoctor, DBDoctor, std::allocator&lt;DBDoctor&gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="993.3" y="837" width="4.7" height="15.0" fill="rgb(243,177,42)" rx="2" ry="2" />
+<text  x="996.33" y="847.5" ></text>
+</g>
+<g >
+<title>std::move_backward&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="637.5" y="773" width="4.6" height="15.0" fill="rgb(208,15,3)" rx="2" ry="2" />
+<text  x="640.46" y="783.5" ></text>
+</g>
+<g >
+<title>std::_Hashtable&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (131,313,130 samples, 5.16%)</title><rect x="838.8" y="885" width="60.9" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="841.81" y="895.5" >std::_..</text>
+</g>
+<g >
+<title>__gnu_cxx::__aligned_buffer&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="866.9" y="821" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="869.90" y="831.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;DBDoctor&gt; &gt;::construct&lt;DBDoctor, DBDoctor&gt; (10,101,010 samples, 0.40%)</title><rect x="988.7" y="821" width="4.6" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="991.65" y="831.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="709" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="719.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="533" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="543.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::_S_relocate (30,303,030 samples, 1.19%)</title><rect x="1026.1" y="885" width="14.1" height="15.0" fill="rgb(234,134,32)" rx="2" ry="2" />
+<text  x="1029.11" y="895.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBNurse*, std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt; &gt;::base (20,202,020 samples, 0.79%)</title><rect x="408.0" y="837" width="9.4" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="411.02" y="847.5" ></text>
+</g>
+<g >
+<title>DBEREntry::operator= (20,202,020 samples, 0.79%)</title><rect x="609.4" y="757" width="9.3" height="15.0" fill="rgb(246,190,45)" rx="2" ry="2" />
+<text  x="612.37" y="767.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (20,202,020 samples, 0.79%)</title><rect x="941.8" y="901" width="9.4" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="944.83" y="911.5" ></text>
+</g>
+<g >
+<title>[unknown] (30,303,030 samples, 1.19%)</title><rect x="1157.2" y="981" width="14.1" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1160.22" y="991.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="421" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="431.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="165" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="175.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Node_iterator&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="42.8" y="933" width="4.7" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="45.78" y="943.5" ></text>
+</g>
+<g >
+<title>std::__iterator_category&lt;char const*&gt; (10,101,010 samples, 0.40%)</title><rect x="1082.3" y="917" width="4.7" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="1085.30" y="927.5" ></text>
+</g>
+<g >
+<title>std::forward&lt;Database&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="829.4" y="917" width="4.7" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="832.44" y="927.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBNurse*, std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt; &gt;::operator* (40,404,040 samples, 1.59%)</title><rect x="159.8" y="853" width="18.8" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="162.84" y="863.5" ></text>
+</g>
+<g >
+<title>main (2,464,646,440 samples, 96.83%)</title><rect x="10.0" y="965" width="1142.5" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
+<text  x="13.00" y="975.5" >main</text>
+</g>
+<g >
+<title>std::__addressof&lt;DBEquipment&gt; (10,101,010 samples, 0.40%)</title><rect x="1030.8" y="821" width="4.7" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="1033.79" y="831.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt;::push_back (30,303,030 samples, 1.19%)</title><rect x="984.0" y="933" width="14.0" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="986.97" y="943.5" ></text>
+</g>
+<g >
+<title>std::__detail::operator== (10,101,010 samples, 0.40%)</title><rect x="47.5" y="933" width="4.6" height="15.0" fill="rgb(251,215,51)" rx="2" ry="2" />
+<text  x="50.46" y="943.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt;::_M_realloc_insert&lt;DBDoctor&gt; (30,303,030 samples, 1.19%)</title><rect x="984.0" y="901" width="14.0" height="15.0" fill="rgb(243,176,42)" rx="2" ry="2" />
+<text  x="986.97" y="911.5" ></text>
+</g>
+<g >
+<title>std::swap&lt;DBEREntry&gt; (10,101,010 samples, 0.40%)</title><rect x="646.8" y="741" width="4.7" height="15.0" fill="rgb(211,29,6)" rx="2" ry="2" />
+<text  x="649.83" y="751.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="453" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="463.5" ></text>
+</g>
+<g >
+<title>std::any::any&lt;BillResult, BillResult, std::any::_Manager_external&lt;BillResult&gt;, void&gt; (10,101,010 samples, 0.40%)</title><rect x="782.6" y="853" width="4.7" height="15.0" fill="rgb(253,222,53)" rx="2" ry="2" />
+<text  x="785.62" y="863.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="629" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="639.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::__normal_iterator (10,101,010 samples, 0.40%)</title><rect x="571.9" y="821" width="4.7" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="574.90" y="831.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="206.7" y="853" width="14.0" height="15.0" fill="rgb(217,59,14)" rx="2" ry="2" />
+<text  x="209.67" y="863.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="565" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="575.5" ></text>
+</g>
+<g >
+<title>std::any::~any (60,606,060 samples, 2.38%)</title><rect x="1115.1" y="949" width="28.1" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="1118.08" y="959.5" >s..</text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::back (10,101,010 samples, 0.40%)</title><rect x="1040.2" y="901" width="4.6" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="1043.16" y="911.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt; (20,202,020 samples, 0.79%)</title><rect x="267.5" y="837" width="9.4" height="15.0" fill="rgb(217,55,13)" rx="2" ry="2" />
+<text  x="270.54" y="847.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="197.3" y="853" width="4.7" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="200.30" y="863.5" ></text>
+</g>
+<g >
+<title>std::forward&lt;std::any const&amp;&gt; (20,202,020 samples, 0.79%)</title><rect x="820.1" y="901" width="9.3" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="823.08" y="911.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;DBEquipment&gt; &gt;::construct&lt;DBEquipment, DBEquipment&gt; (10,101,010 samples, 0.40%)</title><rect x="1012.1" y="901" width="4.6" height="15.0" fill="rgb(227,104,25)" rx="2" ry="2" />
+<text  x="1015.06" y="911.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Mod_range_hashing::operator (10,101,010 samples, 0.40%)</title><rect x="904.4" y="869" width="4.6" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="907.37" y="879.5" ></text>
+</g>
+<g >
+<title>std::move&lt;DBEREntry&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="632.8" y="757" width="4.7" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
+<text  x="635.78" y="767.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="763.9" y="837" width="4.7" height="15.0" fill="rgb(217,55,13)" rx="2" ry="2" />
+<text  x="766.89" y="847.5" ></text>
+</g>
+<g >
+<title>std::__final_insertion_sort&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (141,414,140 samples, 5.56%)</title><rect x="581.3" y="805" width="65.5" height="15.0" fill="rgb(248,197,47)" rx="2" ry="2" />
+<text  x="584.27" y="815.5" >std::__..</text>
+</g>
+<g >
+<title>fn_schedule_or (10,101,010 samples, 0.40%)</title><rect x="773.3" y="853" width="4.6" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="776.25" y="863.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="677" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="687.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="918.4" y="885" width="4.7" height="15.0" fill="rgb(238,154,36)" rx="2" ry="2" />
+<text  x="921.41" y="895.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBNurse*, std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt; &gt; (40,404,040 samples, 1.59%)</title><rect x="417.4" y="837" width="18.7" height="15.0" fill="rgb(243,175,41)" rx="2" ry="2" />
+<text  x="420.38" y="847.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_node_value_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="866.9" y="853" width="4.7" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="869.90" y="863.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt;::push_back (40,404,040 samples, 1.59%)</title><rect x="276.9" y="837" width="18.7" height="15.0" fill="rgb(253,225,53)" rx="2" ry="2" />
+<text  x="279.90" y="847.5" ></text>
+</g>
+<g >
+<title>malloc (20,202,020 samples, 0.79%)</title><rect x="1176.0" y="981" width="9.3" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="1178.95" y="991.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::emplace_back&lt;DBEquipment&gt; (101,010,100 samples, 3.97%)</title><rect x="998.0" y="917" width="46.8" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="1001.02" y="927.5" >std:..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="69" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="79.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string (10,101,010 samples, 0.40%)</title><rect x="1012.1" y="869" width="4.6" height="15.0" fill="rgb(212,35,8)" rx="2" ry="2" />
+<text  x="1015.06" y="879.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt;::push_back (10,101,010 samples, 0.40%)</title><rect x="1147.9" y="949" width="4.6" height="15.0" fill="rgb(237,151,36)" rx="2" ry="2" />
+<text  x="1150.86" y="959.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="869" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="879.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::operator++ (60,606,060 samples, 2.38%)</title><rect x="131.7" y="853" width="28.1" height="15.0" fill="rgb(240,164,39)" rx="2" ry="2" />
+<text  x="134.75" y="863.5" >_..</text>
+</g>
+<g >
+<title>std::any::any&lt;AdmitEvent&amp;, AdmitEvent, std::any::_Manager_external&lt;AdmitEvent&gt;, void&gt; (20,202,020 samples, 0.79%)</title><rect x="1091.7" y="949" width="9.3" height="15.0" fill="rgb(237,149,35)" rx="2" ry="2" />
+<text  x="1094.67" y="959.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="220.7" y="853" width="4.7" height="15.0" fill="rgb(217,55,13)" rx="2" ry="2" />
+<text  x="223.71" y="863.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="437" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="447.5" ></text>
+</g>
+<g >
+<title>[libc.so.6] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="37" width="4.7" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1169.59" y="47.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_linear_insert&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Val_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="642.1" y="773" width="4.7" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="645.14" y="783.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="805" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="815.5" ></text>
+</g>
+<g >
+<title>fn_admit_patient (151,515,150 samples, 5.95%)</title><rect x="225.4" y="853" width="70.2" height="15.0" fill="rgb(222,79,18)" rx="2" ry="2" />
+<text  x="228.40" y="863.5" >fn_admi..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="661" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="671.5" ></text>
+</g>
+<g >
+<title>std::hash&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::operator (40,404,040 samples, 1.59%)</title><rect x="923.1" y="885" width="18.7" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="926.10" y="895.5" ></text>
+</g>
+<g >
+<title>std::_Hash_bytes (20,202,020 samples, 0.79%)</title><rect x="932.5" y="869" width="9.3" height="15.0" fill="rgb(232,127,30)" rx="2" ry="2" />
+<text  x="935.46" y="879.5" ></text>
+</g>
+<g >
+<title>std::any_cast&lt;NurseEvent&gt; (10,101,010 samples, 0.40%)</title><rect x="796.7" y="837" width="4.6" height="15.0" fill="rgb(235,138,33)" rx="2" ry="2" />
+<text  x="799.67" y="847.5" ></text>
+</g>
+<g >
+<title>std::unordered_map&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::function&lt;std::any  (252,525,250 samples, 9.92%)</title><rect x="834.1" y="933" width="117.1" height="15.0" fill="rgb(233,131,31)" rx="2" ry="2" />
+<text  x="837.13" y="943.5" >std::unordered..</text>
+</g>
+<g >
+<title>std::_Function_base::_M_empty (20,202,020 samples, 0.79%)</title><rect x="56.8" y="917" width="9.4" height="15.0" fill="rgb(244,183,43)" rx="2" ry="2" />
+<text  x="59.83" y="927.5" ></text>
+</g>
+<g >
+<title>std::any::_Manager_internal&lt;DischargeEvent&gt;::_S_access (10,101,010 samples, 0.40%)</title><rect x="792.0" y="821" width="4.7" height="15.0" fill="rgb(235,138,33)" rx="2" ry="2" />
+<text  x="794.98" y="831.5" ></text>
+</g>
+<g >
+<title>std::operator==&lt;char&gt; (20,202,020 samples, 0.79%)</title><rect x="885.6" y="837" width="9.4" height="15.0" fill="rgb(216,52,12)" rx="2" ry="2" />
+<text  x="888.63" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="325" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="335.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;DBEquipment*, DBEquipment*, std::allocator&lt;DBEquipment&gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="1026.1" y="853" width="14.1" height="15.0" fill="rgb(237,149,35)" rx="2" ry="2" />
+<text  x="1029.11" y="863.5" ></text>
+</g>
+<g >
+<title>std::__introsort_loop&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, long, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (20,202,020 samples, 0.79%)</title><rect x="646.8" y="805" width="9.4" height="15.0" fill="rgb(231,120,28)" rx="2" ry="2" />
+<text  x="649.83" y="815.5" ></text>
+</g>
+<g >
+<title>DBEREntry::DBEREntry (10,101,010 samples, 0.40%)</title><rect x="604.7" y="757" width="4.7" height="15.0" fill="rgb(234,136,32)" rx="2" ry="2" />
+<text  x="607.68" y="767.5" ></text>
+</g>
+<g >
+<title>std::any_cast&lt;AdmitEvent&gt; (10,101,010 samples, 0.40%)</title><rect x="787.3" y="853" width="4.7" height="15.0" fill="rgb(228,110,26)" rx="2" ry="2" />
+<text  x="790.30" y="863.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;::operator* (10,101,010 samples, 0.40%)</title><rect x="651.5" y="741" width="4.7" height="15.0" fill="rgb(226,100,24)" rx="2" ry="2" />
+<text  x="654.51" y="751.5" ></text>
+</g>
+<g >
+<title>std::allocator&lt;char&gt;::~allocator (10,101,010 samples, 0.40%)</title><rect x="1087.0" y="949" width="4.7" height="15.0" fill="rgb(234,134,32)" rx="2" ry="2" />
+<text  x="1089.98" y="959.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="597" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="607.5" ></text>
+</g>
+<g >
+<title>std::__copy_move_backward_a&lt;true, __gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="637.5" y="757" width="4.6" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="640.46" y="767.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="258.2" y="837" width="4.7" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="261.17" y="847.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string&lt;std::allocator&lt;char&gt; &gt; (60,606,060 samples, 2.38%)</title><rect x="1058.9" y="949" width="28.1" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="1061.89" y="959.5" >s..</text>
+</g>
+<g >
+<title>fn_er_admission (161,616,160 samples, 6.35%)</title><rect x="581.3" y="853" width="74.9" height="15.0" fill="rgb(231,119,28)" rx="2" ry="2" />
+<text  x="584.27" y="863.5" >fn_er_ad..</text>
+</g>
+<g >
+<title>std::__insertion_sort&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (131,313,130 samples, 5.16%)</title><rect x="581.3" y="789" width="60.8" height="15.0" fill="rgb(233,132,31)" rx="2" ry="2" />
+<text  x="584.27" y="799.5" >std::_..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="501" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="511.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator-&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="291.0" y="789" width="4.6" height="15.0" fill="rgb(233,131,31)" rx="2" ry="2" />
+<text  x="293.95" y="799.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::operator* (10,101,010 samples, 0.40%)</title><rect x="735.8" y="837" width="4.7" height="15.0" fill="rgb(225,92,22)" rx="2" ry="2" />
+<text  x="738.79" y="847.5" ></text>
+</g>
+<g >
+<title>[libc.so.6] (20,202,020 samples, 0.79%)</title><rect x="1157.2" y="965" width="9.4" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="1160.22" y="975.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt; (50,505,050 samples, 1.98%)</title><rect x="548.5" y="837" width="23.4" height="15.0" fill="rgb(217,59,14)" rx="2" ry="2" />
+<text  x="551.49" y="847.5" >_..</text>
+</g>
+<g >
+<title>std::__relocate_object_a&lt;DBEquipment, DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="1035.5" y="821" width="4.7" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="1038.48" y="831.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="517" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="527.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_linear_insert&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Val_comp_iter&lt;fn_er_admission (101,010,100 samples, 3.97%)</title><rect x="590.6" y="773" width="46.9" height="15.0" fill="rgb(254,228,54)" rx="2" ry="2" />
+<text  x="593.63" y="783.5" >std:..</text>
+</g>
+<g >
+<title>std::move&lt;DBBed&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="969.9" y="917" width="4.7" height="15.0" fill="rgb(216,51,12)" rx="2" ry="2" />
+<text  x="972.92" y="927.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;DBBed*, DBBed*, std::allocator&lt;DBBed&gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="974.6" y="853" width="4.7" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="977.60" y="863.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::basic_string&lt;std::allocator&lt;char&gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="965.2" y="933" width="4.7" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="968.24" y="943.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBDoctor*, std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="333.1" y="837" width="14.0" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
+<text  x="336.10" y="847.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="581.3" y="773" width="4.7" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="584.27" y="783.5" ></text>
+</g>
+<g >
+<title>std::forward&lt;DischargeEvent&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="1105.7" y="933" width="4.7" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="1108.71" y="943.5" ></text>
+</g>
+<g >
+<title>make_database (212,121,210 samples, 8.33%)</title><rect x="951.2" y="949" width="98.3" height="15.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="954.19" y="959.5" >make_database</text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (10,101,010 samples, 0.40%)</title><rect x="1049.5" y="949" width="4.7" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="1052.52" y="959.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="511.0" y="837" width="4.7" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="514.03" y="847.5" ></text>
+</g>
+<g >
+<title>Dispatcher::invoke (1,989,898,970 samples, 78.17%)</title><rect x="28.7" y="949" width="922.5" height="15.0" fill="rgb(242,171,40)" rx="2" ry="2" />
+<text  x="31.73" y="959.5" >Dispatcher::invoke</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="613" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="623.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::operator- (10,101,010 samples, 0.40%)</title><rect x="1040.2" y="885" width="4.6" height="15.0" fill="rgb(205,3,0)" rx="2" ry="2" />
+<text  x="1043.16" y="895.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt;::begin (10,101,010 samples, 0.40%)</title><rect x="576.6" y="837" width="4.7" height="15.0" fill="rgb(212,33,8)" rx="2" ry="2" />
+<text  x="579.59" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="405" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="415.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="586.0" y="773" width="4.6" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="588.95" y="783.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="262.9" y="837" width="4.6" height="15.0" fill="rgb(243,174,41)" rx="2" ry="2" />
+<text  x="265.86" y="847.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_node_value_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="866.9" y="837" width="4.7" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="869.90" y="847.5" ></text>
+</g>
+<g >
+<title>std::__niter_base&lt;DBDoctor*&gt; (10,101,010 samples, 0.40%)</title><rect x="984.0" y="837" width="4.7" height="15.0" fill="rgb(229,110,26)" rx="2" ry="2" />
+<text  x="986.97" y="847.5" ></text>
+</g>
+<g >
+<title>fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="618.7" y="741" width="4.7" height="15.0" fill="rgb(231,119,28)" rx="2" ry="2" />
+<text  x="621.73" y="751.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (20,202,020 samples, 0.79%)</title><rect x="899.7" y="885" width="9.3" height="15.0" fill="rgb(238,154,36)" rx="2" ry="2" />
+<text  x="902.68" y="895.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="469" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="479.5" ></text>
+</g>
+<g >
+<title>std::__sort&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (161,616,160 samples, 6.35%)</title><rect x="581.3" y="821" width="74.9" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="584.27" y="831.5" >std::__s..</text>
+</g>
+<g >
+<title>std::vector&lt;DBOperatingRoom, std::allocator&lt;DBOperatingRoom&gt; &gt;::_M_realloc_insert&lt;DBOperatingRoom&gt; (10,101,010 samples, 0.40%)</title><rect x="1044.8" y="901" width="4.7" height="15.0" fill="rgb(226,100,23)" rx="2" ry="2" />
+<text  x="1047.84" y="911.5" ></text>
+</g>
+<g >
+<title>std::any_cast&lt;NurseEvent&gt; (10,101,010 samples, 0.40%)</title><rect x="796.7" y="853" width="4.6" height="15.0" fill="rgb(235,138,33)" rx="2" ry="2" />
+<text  x="799.67" y="863.5" ></text>
+</g>
+<g >
+<title>std::any::any&lt;EquipEvent&amp;, EquipEvent, std::any::_Manager_external&lt;EquipEvent&gt;, void&gt; (10,101,010 samples, 0.40%)</title><rect x="1110.4" y="949" width="4.7" height="15.0" fill="rgb(230,117,27)" rx="2" ry="2" />
+<text  x="1113.40" y="959.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBPatient*, std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt; &gt;::base (20,202,020 samples, 0.79%)</title><rect x="740.5" y="837" width="9.3" height="15.0" fill="rgb(249,204,48)" rx="2" ry="2" />
+<text  x="743.48" y="847.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBDoctor*, std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="99.0" y="853" width="4.7" height="15.0" fill="rgb(244,180,43)" rx="2" ry="2" />
+<text  x="101.97" y="863.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt;::back (10,101,010 samples, 0.40%)</title><rect x="979.3" y="901" width="4.7" height="15.0" fill="rgb(228,110,26)" rx="2" ry="2" />
+<text  x="982.29" y="911.5" ></text>
+</g>
+<g >
+<title>cfree (10,101,010 samples, 0.40%)</title><rect x="1171.3" y="981" width="4.7" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="1174.27" y="991.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_code_base&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;, std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (70,707,070 samples, 2.78%)</title><rect x="909.0" y="901" width="32.8" height="15.0" fill="rgb(238,154,36)" rx="2" ry="2" />
+<text  x="912.05" y="911.5" >st..</text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;DBEquipment&gt;::construct&lt;DBEquipment, DBEquipment&gt; (10,101,010 samples, 0.40%)</title><rect x="1012.1" y="885" width="4.6" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="1015.06" y="895.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt;::_S_do_relocate (30,303,030 samples, 1.19%)</title><rect x="984.0" y="869" width="14.0" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="986.97" y="879.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_partition_pivot&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (20,202,020 samples, 0.79%)</title><rect x="646.8" y="789" width="9.4" height="15.0" fill="rgb(246,192,45)" rx="2" ry="2" />
+<text  x="649.83" y="799.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBOperatingRoom, std::allocator&lt;DBOperatingRoom&gt; &gt;::push_back (10,101,010 samples, 0.40%)</title><rect x="1044.8" y="933" width="4.7" height="15.0" fill="rgb(229,110,26)" rx="2" ry="2" />
+<text  x="1047.84" y="943.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="693" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="703.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="965" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="975.5" ></text>
+</g>
+<g >
+<title>std::allocator_traits&lt;std::allocator&lt;DBEquipment&gt; &gt;::destroy&lt;DBEquipment&gt; (10,101,010 samples, 0.40%)</title><rect x="1035.5" y="805" width="4.7" height="15.0" fill="rgb(248,201,48)" rx="2" ry="2" />
+<text  x="1038.48" y="815.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="581" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="591.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="651.5" y="757" width="4.7" height="15.0" fill="rgb(219,67,16)" rx="2" ry="2" />
+<text  x="654.51" y="767.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt;::_S_do_relocate (10,101,010 samples, 0.40%)</title><rect x="974.6" y="869" width="4.7" height="15.0" fill="rgb(207,11,2)" rx="2" ry="2" />
+<text  x="977.60" y="879.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="229" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="239.5" ></text>
+</g>
+<g >
+<title>std::sort&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, fn_er_admission (161,616,160 samples, 6.35%)</title><rect x="581.3" y="837" width="74.9" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="584.27" y="847.5" >std::sor..</text>
+</g>
+<g >
+<title>malloc (10,101,010 samples, 0.40%)</title><rect x="1091.7" y="933" width="4.6" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="1094.67" y="943.5" ></text>
+</g>
+<g >
+<title>[faas] (10,101,010 samples, 0.40%)</title><rect x="1096.3" y="917" width="4.7" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="1099.35" y="927.5" ></text>
+</g>
+<g >
+<title>make_dispatcher (1,565,656,550 samples, 61.51%)</title><rect x="80.2" y="869" width="725.8" height="15.0" fill="rgb(208,16,3)" rx="2" ry="2" />
+<text  x="83.24" y="879.5" >make_dispatcher</text>
+</g>
+<g >
+<title>[libc.so.6] (2,474,747,450 samples, 97.22%)</title><rect x="10.0" y="981" width="1147.2" height="15.0" fill="rgb(223,84,20)" rx="2" ry="2" />
+<text  x="13.00" y="991.5" >[libc.so.6]</text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt;::base (20,202,020 samples, 0.79%)</title><rect x="726.4" y="837" width="9.4" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="729.43" y="847.5" ></text>
+</g>
+<g >
+<title>std::__any_caster&lt;NurseEvent&gt; (10,101,010 samples, 0.40%)</title><rect x="796.7" y="821" width="4.6" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="799.67" y="831.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::_M_construct&lt;char const*&gt; (30,303,030 samples, 1.19%)</title><rect x="1072.9" y="933" width="14.1" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="1075.94" y="943.5" ></text>
+</g>
+<g >
+<title>std::any::_Manager_internal&lt;BillEvent&gt;::_S_create&lt;BillEvent&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="1101.0" y="933" width="4.7" height="15.0" fill="rgb(220,73,17)" rx="2" ry="2" />
+<text  x="1104.03" y="943.5" ></text>
+</g>
+<g >
+<title>std::any_cast&lt;DischargeEvent&gt; (10,101,010 samples, 0.40%)</title><rect x="792.0" y="837" width="4.7" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="794.98" y="847.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="637.5" y="709" width="4.6" height="15.0" fill="rgb(252,216,51)" rx="2" ry="2" />
+<text  x="640.46" y="719.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hashtable_ebo_helper&lt;0, std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;, true&gt;::_M_cget (10,101,010 samples, 0.40%)</title><rect x="876.3" y="837" width="4.7" height="15.0" fill="rgb(241,165,39)" rx="2" ry="2" />
+<text  x="879.27" y="847.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::_S_do_relocate (30,303,030 samples, 1.19%)</title><rect x="1026.1" y="869" width="14.1" height="15.0" fill="rgb(207,11,2)" rx="2" ry="2" />
+<text  x="1029.11" y="879.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::_S_do_relocate (10,101,010 samples, 0.40%)</title><rect x="1021.4" y="885" width="4.7" height="15.0" fill="rgb(207,11,2)" rx="2" ry="2" />
+<text  x="1024.43" y="895.5" ></text>
+</g>
+<g >
+<title>std::__niter_wrap&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, DBEREntry*&gt; (10,101,010 samples, 0.40%)</title><rect x="637.5" y="741" width="4.6" height="15.0" fill="rgb(230,116,27)" rx="2" ry="2" />
+<text  x="640.46" y="751.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="901" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="911.5" ></text>
+</g>
+<g >
+<title>std::any::reset (40,404,040 samples, 1.59%)</title><rect x="1124.4" y="933" width="18.8" height="15.0" fill="rgb(224,88,21)" rx="2" ry="2" />
+<text  x="1127.44" y="943.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt;::push_back (30,303,030 samples, 1.19%)</title><rect x="969.9" y="933" width="14.1" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="972.92" y="943.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator!=&lt;DBEquipment*, std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="749.8" y="837" width="14.1" height="15.0" fill="rgb(217,59,14)" rx="2" ry="2" />
+<text  x="752.84" y="847.5" ></text>
+</g>
+<g >
+<title>std::move&lt;DBEREntry&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="646.8" y="725" width="4.7" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
+<text  x="649.83" y="735.5" ></text>
+</g>
+<g >
+<title>std::__niter_base&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="637.5" y="725" width="4.6" height="15.0" fill="rgb(237,148,35)" rx="2" ry="2" />
+<text  x="640.46" y="735.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::operator-&lt;DBOperatingRoom*, std::vector&lt;DBOperatingRoom, std::allocator&lt;DBOperatingRoom&gt; &gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="1044.8" y="885" width="4.7" height="15.0" fill="rgb(221,75,18)" rx="2" ry="2" />
+<text  x="1047.84" y="895.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="149" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="159.5" ></text>
+</g>
+<g >
+<title>[faas] (10,101,010 samples, 0.40%)</title><rect x="1063.6" y="933" width="4.7" height="15.0" fill="rgb(219,68,16)" rx="2" ry="2" />
+<text  x="1066.57" y="943.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="837" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="847.5" ></text>
+</g>
+<g >
+<title>std::any::_Storage::_Storage (10,101,010 samples, 0.40%)</title><rect x="1110.4" y="933" width="4.7" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="1113.40" y="943.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="85" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="95.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="645" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="655.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="821" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="831.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::_M_realloc_insert&lt;DBEquipment&gt; (50,505,050 samples, 1.98%)</title><rect x="1016.7" y="901" width="23.5" height="15.0" fill="rgb(239,160,38)" rx="2" ry="2" />
+<text  x="1019.75" y="911.5" >s..</text>
+</g>
+<g >
+<title>std::_Function_handler&lt;std::any  (1,646,464,630 samples, 64.68%)</title><rect x="66.2" y="917" width="763.2" height="15.0" fill="rgb(242,174,41)" rx="2" ry="2" />
+<text  x="69.19" y="927.5" >std::_Function_handler&lt;std::any </text>
+</g>
+<g >
+<title>fn_assign_doctor_shift (90,909,090 samples, 3.57%)</title><rect x="305.0" y="853" width="42.1" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="308.00" y="863.5" >fn_..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="277" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="287.5" ></text>
+</g>
+<g >
+<title>std::_Vector_base&lt;DBEquipment, std::allocator&lt;DBEquipment&gt; &gt;::_M_get_Tp_allocator (10,101,010 samples, 0.40%)</title><rect x="1007.4" y="901" width="4.7" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="1010.38" y="911.5" ></text>
+</g>
+<g >
+<title>std::__invoke_impl&lt;std::any, make_dispatcher (1,575,757,560 samples, 61.90%)</title><rect x="80.2" y="885" width="730.5" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="83.24" y="895.5" >std::__invoke_impl&lt;std::any, make_dispatcher</text>
+</g>
+<g >
+<title>std::__relocate_a_1&lt;DBDoctor*, DBDoctor*, std::allocator&lt;DBDoctor&gt; &gt; (10,101,010 samples, 0.40%)</title><rect x="988.7" y="837" width="4.6" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="991.65" y="847.5" ></text>
+</g>
+<g >
+<title>std::__unguarded_insertion_sort&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="642.1" y="789" width="4.7" height="15.0" fill="rgb(225,92,22)" rx="2" ry="2" />
+<text  x="645.14" y="799.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBNurse*, std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt; &gt;::base (10,101,010 samples, 0.40%)</title><rect x="431.4" y="821" width="4.7" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="434.43" y="831.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;DBPatient&gt;::construct&lt;DBPatient, DBPatient&gt; (20,202,020 samples, 0.79%)</title><rect x="276.9" y="789" width="9.4" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
+<text  x="279.90" y="799.5" ></text>
+</g>
+<g >
+<title>fn_discharge_patient (303,030,300 samples, 11.90%)</title><rect x="440.8" y="853" width="140.5" height="15.0" fill="rgb(217,55,13)" rx="2" ry="2" />
+<text  x="443.79" y="863.5" >fn_discharge_pati..</text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="933" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="943.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="181" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="191.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt;::_M_realloc_insert&lt;DBBed&gt; (10,101,010 samples, 0.40%)</title><rect x="974.6" y="901" width="4.7" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="977.60" y="911.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="373" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="383.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__ops::_Val_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="618.7" y="757" width="4.7" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="621.73" y="767.5" ></text>
+</g>
+<g >
+<title>DBEREntry::operator= (10,101,010 samples, 0.40%)</title><rect x="642.1" y="757" width="4.7" height="15.0" fill="rgb(246,190,45)" rx="2" ry="2" />
+<text  x="645.14" y="767.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="261" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="271.5" ></text>
+</g>
+<g >
+<title>fn_allocate_equipment (20,202,020 samples, 0.79%)</title><rect x="295.6" y="853" width="9.4" height="15.0" fill="rgb(253,221,53)" rx="2" ry="2" />
+<text  x="298.63" y="863.5" ></text>
+</g>
+<g >
+<title>std::forward&lt;std::any const&amp;&gt; (20,202,020 samples, 0.79%)</title><rect x="810.7" y="885" width="9.4" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="813.71" y="895.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt;::operator* (20,202,020 samples, 0.79%)</title><rect x="244.1" y="837" width="9.4" height="15.0" fill="rgb(250,207,49)" rx="2" ry="2" />
+<text  x="247.13" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="549" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="559.5" ></text>
+</g>
+<g >
+<title>std::any::~any (10,101,010 samples, 0.40%)</title><rect x="1152.5" y="965" width="4.7" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="1155.54" y="975.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="53" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="63.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBNurse, std::allocator&lt;DBNurse&gt; &gt;::begin (10,101,010 samples, 0.40%)</title><rect x="436.1" y="837" width="4.7" height="15.0" fill="rgb(246,189,45)" rx="2" ry="2" />
+<text  x="439.11" y="847.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBPatient, std::allocator&lt;DBPatient&gt; &gt;::emplace_back&lt;DBPatient&gt; (40,404,040 samples, 1.59%)</title><rect x="276.9" y="821" width="18.7" height="15.0" fill="rgb(214,43,10)" rx="2" ry="2" />
+<text  x="279.90" y="831.5" ></text>
+</g>
+<g >
+<title>std::any::_Storage::_Storage (10,101,010 samples, 0.40%)</title><rect x="782.6" y="837" width="4.7" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="785.62" y="847.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBOperatingRoom, std::allocator&lt;DBOperatingRoom&gt; &gt;::emplace_back&lt;DBOperatingRoom&gt; (10,101,010 samples, 0.40%)</title><rect x="1044.8" y="917" width="4.7" height="15.0" fill="rgb(252,217,51)" rx="2" ry="2" />
+<text  x="1047.84" y="927.5" ></text>
+</g>
+<g >
+<title>std::__move_median_to_first&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, __gnu_cxx::__ops::_Iter_comp_iter&lt;fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="646.8" y="773" width="4.7" height="15.0" fill="rgb(241,169,40)" rx="2" ry="2" />
+<text  x="649.83" y="783.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="293" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="303.5" ></text>
+</g>
+<g >
+<title>std::equal_to&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; &gt;::operator (30,303,030 samples, 1.19%)</title><rect x="881.0" y="853" width="14.0" height="15.0" fill="rgb(245,188,45)" rx="2" ry="2" />
+<text  x="883.95" y="863.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::__normal_iterator&lt;DBBed*, std::vector&lt;DBBed, std::allocator&lt;DBBed&gt; &gt; &gt;::operator++ (10,101,010 samples, 0.40%)</title><rect x="94.3" y="853" width="4.7" height="15.0" fill="rgb(215,50,11)" rx="2" ry="2" />
+<text  x="97.29" y="863.5" ></text>
+</g>
+<g >
+<title>std::any::_Manager_external&lt;AdmitEvent&gt;::_S_create&lt;AdmitEvent&amp;&gt; (10,101,010 samples, 0.40%)</title><rect x="1096.3" y="933" width="4.7" height="15.0" fill="rgb(236,146,34)" rx="2" ry="2" />
+<text  x="1099.35" y="943.5" ></text>
+</g>
+<g >
+<title>std::vector&lt;DBDoctor, std::allocator&lt;DBDoctor&gt; &gt;::_S_relocate (30,303,030 samples, 1.19%)</title><rect x="984.0" y="885" width="14.0" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="986.97" y="895.5" ></text>
+</g>
+<g >
+<title>__gnu_cxx::new_allocator&lt;DBEquipment&gt;::construct&lt;DBEquipment, DBEquipment&gt; (10,101,010 samples, 0.40%)</title><rect x="1002.7" y="901" width="4.7" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="1005.70" y="911.5" ></text>
+</g>
+<g >
+<title>std::sort&lt;__gnu_cxx::__normal_iterator&lt;DBEREntry*, std::vector&lt;DBEREntry, std::allocator&lt;DBEREntry&gt; &gt; &gt;, fn_er_admission (10,101,010 samples, 0.40%)</title><rect x="801.3" y="853" width="4.7" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="804.35" y="863.5" ></text>
+</g>
+<g >
+<title>std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt;::length (10,101,010 samples, 0.40%)</title><rect x="913.7" y="885" width="4.7" height="15.0" fill="rgb(232,126,30)" rx="2" ry="2" />
+<text  x="916.73" y="895.5" ></text>
+</g>
+<g >
+<title>std::any::any&lt;DischargeEvent&amp;, DischargeEvent, std::any::_Manager_internal&lt;DischargeEvent&gt;, void&gt; (10,101,010 samples, 0.40%)</title><rect x="1105.7" y="949" width="4.7" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="1108.71" y="959.5" ></text>
+</g>
+<g >
+<title>std::__detail::_Hash_node_value_base&lt;std::pair&lt;std::__cxx11::basic_string&lt;char, std::char_traits&lt;char&gt;, std::allocator&lt;char&gt; &gt; const, std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="42.8" y="917" width="4.7" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="45.78" y="927.5" ></text>
+</g>
+<g >
+<title>all (2,545,454,520 samples, 100%)</title><rect x="10.0" y="1013" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="1023.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a&lt;DBDoctor*, DBDoctor*, std::allocator&lt;DBDoctor&gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="984.0" y="853" width="14.0" height="15.0" fill="rgb(240,165,39)" rx="2" ry="2" />
+<text  x="986.97" y="863.5" ></text>
+</g>
+<g >
+<title>std::_Any_data::_M_access&lt;make_dispatcher (10,101,010 samples, 0.40%)</title><rect x="66.2" y="885" width="4.7" height="15.0" fill="rgb(227,102,24)" rx="2" ry="2" />
+<text  x="69.19" y="895.5" ></text>
+</g>
+<g >
+<title>std::__relocate_a_1&lt;DBEquipment*, DBEquipment*, std::allocator&lt;DBEquipment&gt; &gt; (30,303,030 samples, 1.19%)</title><rect x="1026.1" y="837" width="14.1" height="15.0" fill="rgb(207,10,2)" rx="2" ry="2" />
+<text  x="1029.11" y="847.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="789" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="799.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="197" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="207.5" ></text>
+</g>
+<g >
+<title>[unknown] (10,101,010 samples, 0.40%)</title><rect x="1166.6" y="725" width="4.7" height="15.0" fill="rgb(210,24,5)" rx="2" ry="2" />
+<text  x="1169.59" y="735.5" ></text>
+</g>
+<g >
+<title>std::function&lt;std::any  (10,101,010 samples, 0.40%)</title><rect x="1143.2" y="949" width="4.7" height="15.0" fill="rgb(205,0,0)" rx="2" ry="2" />
+<text  x="1146.17" y="959.5" ></text>
+</g>
+</g>
+</svg>

@@ -1,0 +1,18 @@
+[FaaS] ops=1550000  time=2.56187s
+
+ Performance counter stats for '/root/HW-SW-co-design/HWS/HW2/results/faas':
+
+        6077662984      cycles                    #    2.373 GHz                    
+       12236553367      instructions              #    2.01  insn per cycle         
+              5392      cache-misses              #    0.459 % of all cache refs    
+           1175670      cache-references          #  459.030 K/sec                  
+           2914898      L1-dcache-load-misses                                       
+                20      context-switches          #    7.809 /sec                   
+           2561.20 msec task-clock                #    0.998 CPUs utilized          
+
+       2.565848010 seconds time elapsed
+
+       2.553718000 seconds user
+       0.007981000 seconds sys
+
+
